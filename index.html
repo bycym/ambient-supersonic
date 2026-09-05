@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Ambient Ø / Granular Ø — Web</title>
+	<link rel="stylesheet" href="css/shell.css" />
+</head>
+
+<body>
+
+	<div id="tabbar">
+		<button id="tab-btn-ambient" class="tab-btn active" data-tab="ambient">AMBIENT Ø</button>
+		<button id="tab-btn-granular" class="tab-btn" data-tab="granular">GRANULAR Ø</button>
+		<div class="spacer"></div>
+		<button id="stop-btn" class="stop-btn" disabled>Stop Audio</button>
+		<div class="status" id="global-status">idle</div>
+	</div>
+
+	<div id="panel-ambient" class="tabpanel active">
+		<div class="boot-gate" id="gate-ambient">
+			<div>AMBIENT Ø — 4-layer drone/pad/atmos/noise engine</div>
+			<button id="boot-ambient">Start Audio</button>
+			<div class="hint">Boots only when you open this tab and press Start — browsers require a user
+				gesture before audio can play, and each engine only loads once you actually need it.</div>
+		</div>
+	</div>
+
+	<div id="panel-granular" class="tabpanel">
+		<div class="boot-gate" id="gate-granular">
+			<div>GRANULAR Ø — CLOUDS / GRAINTOPIA / CHEAT CODES</div>
+			<button id="boot-granular">Start Audio</button>
+			<div class="hint">Boots only when you open this tab and press Start.</div>
+		</div>
+	</div>
+
+	<script type="module">
+		const tabs = ["ambient", "granular"];
+		const loaded = { ambient: false, granular: false };
+		const modules = {}; // instrument -> imported app module
+		const handles = {}; // instrument -> { teardown } returned/attached by mount()
+		const status = document.getElementById("global-status");
+		const stopBtn = document.getElementById("stop-btn");
+
+		function activate(name) {
+			for (const t of tabs) {
+				document.getElementById("tab-btn-" + t).classList.toggle("active", t === name);
+				document.getElementById("panel-" + t).classList.toggle("active", t === name);
+			}
+			history.replaceState(null, "", "#" + name);
+		}
+
+		for (const t of tabs) {
+			document.getElementById("tab-btn-" + t).addEventListener("click", () => activate(t));
+		}
+
+		// The AudioContext MUST be created (and resumed) synchronously inside the
+		// click handler, before any `await` — browsers only count the click as a
+		// user gesture for a very short window, and the dynamic import() + boot
+		// chain below easily outlasts it if the context is created later. Creating
+		// it here first and handing it down to SuperSonic is what actually lets
+		// audio start reliably (this was the #1 "no audio" bug in earlier builds).
+		function makeResumedAudioContext() {
+			const AC = window.AudioContext || window.webkitAudioContext;
+			const ctx = new AC();
+			if (ctx.state !== "running") ctx.resume().catch((e) => console.warn("AudioContext resume failed:", e));
+			return ctx;
+		}
+
+		async function bootInstrument(name) {
+			if (loaded[name]) return;
+			loaded[name] = true;
+			const audioContext = makeResumedAudioContext(); // <-- synchronous, still inside the click gesture
+			status.textContent = "loading " + name + "…";
+			const btn = document.getElementById("boot-" + name);
+			btn.disabled = true;
+			btn.textContent = "Loading…";
+			try {
+				// Lazy-loaded: the other instrument's engine + JS never gets
+				// fetched or booted unless its own Start button is pressed.
+				const mod = await import(`./js/${name}/${name}-app.js`);
+				modules[name] = mod;
+				const gate = document.getElementById("gate-" + name);
+				const panel = document.getElementById("panel-" + name);
+				const handle = await mod.mount(panel, gate, audioContext);
+				handles[name] = handle || { teardown: panel._gzTeardown || panel._teardown };
+				status.textContent = name + " running";
+				stopBtn.disabled = false;
+			} catch (err) {
+				console.error(err);
+				status.textContent = name + " failed to load — see console";
+				btn.disabled = false;
+				btn.textContent = "Retry";
+				loaded[name] = false;
+			}
+		}
+
+		stopBtn.addEventListener("click", async () => {
+			const active = tabs.find((t) => document.getElementById("panel-" + t).classList.contains("active"));
+			const handle = active && handles[active];
+			if (!handle || !handle.teardown) { status.textContent = "nothing to stop"; return; }
+			stopBtn.disabled = true;
+			status.textContent = "stopping " + active + "…";
+			try {
+				await handle.teardown();
+			} catch (err) {
+				console.warn("Teardown error:", err);
+			}
+			handles[active] = null;
+			loaded[active] = false;
+			status.textContent = active + " stopped";
+			const btn = document.getElementById("boot-" + active);
+			const gate = document.getElementById("gate-" + active);
+			const panel = document.getElementById("panel-" + active);
+			if (btn) { btn.disabled = false; btn.textContent = "Start Audio"; }
+			if (gate && !gate.parentNode) panel.prepend(gate);
+		});
+
+		document.getElementById("boot-ambient").addEventListener("click", () => bootInstrument("ambient"));
+		document.getElementById("boot-granular").addEventListener("click", () => bootInstrument("granular"));
+
+		// Deep link support: #granular, or ?inst=granular&patch=... from a shared QR/link.
+		const params = new URLSearchParams(window.location.search);
+		const wantInstrument = params.get("inst") || window.location.hash.replace("#", "");
+		if (tabs.includes(wantInstrument)) activate(wantInstrument);
+	</script>
+</body>
+
+</html>

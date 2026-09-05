@@ -1,0 +1,144 @@
+/* ambient_zero_sc web port — styling for js/ambient/*.js's DOM GUI.
+   Reuses the color tokens from shell.css (--bg/--panel/--fg/--accent/...). */
+
+.az-root {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px 16px 40px;
+	max-width: 1200px;
+	margin: 0 auto;
+	font-size: 12px;
+}
+
+.az-root select,
+.az-root input[type="text"],
+.az-root input[type="number"] {
+	background: var(--panel2);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 3px 6px;
+	font-size: 12px;
+}
+
+.az-root input[type="range"] {
+	width: 100%;
+	accent-color: var(--accent);
+}
+
+.az-btn {
+	appearance: none;
+	background: var(--panel2);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	padding: 6px 10px;
+	font-size: 11px;
+	font-weight: 600;
+	cursor: pointer;
+	letter-spacing: 0.02em;
+}
+.az-btn:hover { border-color: var(--accent); }
+.az-btn.active { background: var(--accent); color: #06121c; border-color: var(--accent); }
+.az-btn.az-danger { color: var(--danger); }
+.az-btn.az-danger:hover { border-color: var(--danger); }
+
+.az-topbar, .az-patchbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 12px;
+}
+
+.az-title { font-weight: 700; font-size: 14px; color: var(--accent); margin-right: 6px; }
+
+.az-field, .az-field-inline, .az-field-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--dim);
+}
+.az-field-row { flex-wrap: wrap; margin-bottom: 4px; }
+
+.az-play.active { background: var(--accent2); border-color: var(--accent2); color: #06121c; }
+.az-rec-master.active { background: var(--danger); border-color: var(--danger); color: #240508; }
+
+.az-meter { font-family: monospace; color: var(--dim); min-width: 110px; }
+.az-lp-status { font-size: 11px; color: var(--dim); margin-left: auto; }
+
+.az-qr-modal {
+	position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+	display: flex; align-items: center; justify-content: center; z-index: 1000;
+}
+.az-qr-modal.hidden { display: none; }
+.az-qr-box { background: #fff; padding: 20px; border-radius: 10px; text-align: center; }
+.az-qr-hint { color: #111; margin-bottom: 10px; font-weight: 600; }
+
+.az-tabs {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 6px 10px;
+}
+.az-tab {
+	appearance: none; background: var(--panel2); color: var(--dim);
+	border: 1px solid var(--border); border-radius: 5px;
+	padding: 6px 14px; font-weight: 700; cursor: pointer;
+}
+.az-tab.active { color: #06121c; background: var(--accent); border-color: var(--accent); }
+.az-mutes { display: flex; gap: 4px; margin-left: auto; }
+.az-mute.active { background: var(--danger); border-color: var(--danger); color: #240508; }
+
+.az-body { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+@media (max-width: 900px) { .az-body { grid-template-columns: 1fr; } }
+
+.az-panel {
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 12px;
+}
+.az-panel-title { font-weight: 700; color: var(--accent); margin-bottom: 6px; letter-spacing: 0.04em; }
+
+.az-struct-label { font-weight: 600; margin-bottom: 6px; }
+.az-dropdown-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.az-dropdown-row .az-field-inline { background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; }
+.hidden { display: none !important; }
+
+.az-slider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+.az-slider-row { display: grid; grid-template-columns: 78px 1fr 64px; align-items: center; gap: 6px; padding: 1px 0; }
+.az-slider-label { color: var(--dim); font-size: 11px; }
+.az-slider-val { font-family: monospace; font-size: 11px; text-align: right; }
+
+.az-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; margin: 8px 0; }
+.az-step {
+	aspect-ratio: 1; border-radius: 3px;
+	background: #14161c; border: 1px solid var(--border); cursor: pointer;
+}
+.az-step.on { background: #0e3a5c; }
+.az-step.chord { background: #0d4a30; }
+.az-step.locked { background: #4a3400; }
+.az-step.selected { background: #7a6900; border-color: #ffd400; }
+.az-step.playhead { background: #fff; border-color: #fff; }
+.az-step.disabled { opacity: 0.25; cursor: default; }
+
+.az-chord { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
+.az-lock { margin-top: 6px; }
+.az-lock-status { color: var(--dim); font-size: 11px; margin-top: 4px; }
+.az-recarm.active, .az-clrtrack { background: var(--danger); border-color: var(--danger); color: #240508; }
+
+.az-fxchain { padding-bottom: 12px; }
+.az-fx-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.az-fixed-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: start; }
+.az-fxbox {
+	background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+}
+.az-fxbox .az-field-row { margin-bottom: 8px; }

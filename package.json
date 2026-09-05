@@ -1,0 +1,22 @@
+{
+  "name": "supersonic-webport-app",
+  "version": "1.0.0",
+  "description": "A static local application to serve compiled SuperCollider SynthDefs to SuperSonic via WebAssembly",
+  "main": "index.html",
+  "scripts": {
+    "start": "serve ."
+  },
+  "dependencies": {
+    "serve": "^14.2.4"
+  },
+  "keywords": [
+    "supercollider",
+    "supersonic",
+    "scsynth",
+    "webassembly",
+    "audio",
+    "osc"
+  ],
+  "author": "",
+  "license": "ISC"
+}
