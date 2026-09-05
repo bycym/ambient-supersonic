@@ -345,7 +345,7 @@ var nTables = 64, tableSize = 512;
 		Out.ar(out, XFade2.ar(dry, sig, ((mix * active).clip(0, 1) * 2) - 1));
 	}).add;
 
-	// ---- the 5 original Ambient Ø master effect types, rebuilt as
+	// ---- the 5 original Brain Ø master effect types, rebuilt as
 	// slot-compatible insert effects (in/out/active/mix + 4 own params).
 
 	// TAPE DLY -- szalagos visszhang, "wow" (lassú hangmagasság-
