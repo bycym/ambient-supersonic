@@ -4,7 +4,7 @@
 // the desktop .azpatch format.
 
 import { listPatches, savePatch, loadPatch, deletePatch, exportAzpatchBlob, importAzpatchFile, buildShareUrl, readPatchFromUrl, renderShareQr } from "../shared/patch-share.js";
-import { SLOT_SPECS, defaultLayerParams } from "./data.js";
+import { SLOT_SPECS, activeEngineSpecs, defaultLayerParams } from "./data.js";
 
 const NS = "ambient";
 
@@ -13,6 +13,7 @@ export function serializePatch(state) {
 		layerStruct: state.structure.slice(),
 		layerWave: state.curWave.slice(),
 		noiseSrc: state.noiseSrc,
+		grainSrc: state.grainSrc,
 		lp: state.lp.map((d) => Object.assign({}, d)),
 		muted: state.muted.slice(),
 		slotType: state.slotType.slice(),
@@ -43,8 +44,17 @@ export async function applyPatch(state, data, ctx) {
 	}
 	if (data.muted) state.muted = data.muted.slice();
 	if (data.layerStruct) state.structure = data.layerStruct.slice();
+	while (state.structure.length < 4) state.structure.push(7);
+	if (state.structure[3] < 7) state.structure[3] = 7; // older web patches stored unused NOISE structure as 0
+	for (let i = 0; i < 4; i++) await engine.loadEngineFor(i, state.structure[i]);
 	state.curWave = [-1, -1, -1]; // force resend even if value coincidentally matches
 	if (data.noiseSrc != null) state.noiseSrc = data.noiseSrc;
+	if (data.grainSrc != null) { state.grainSrc = data.grainSrc; engine.setGrainSource(state.grainSrc); }
+	for (let i = 0; i < 4; i++) {
+		for (const row of activeEngineSpecs(i, state.structure[i])) {
+			if (state.lp[i][row[1]] == null) state.lp[i][row[1]] = row[5];
+		}
+	}
 
 	for (let i = 0; i < 3; i++) {
 		const wave = (data.layerWave && data.layerWave[i]) || 0;
@@ -74,11 +84,13 @@ export async function applyPatch(state, data, ctx) {
 		state.masterParams = Object.assign({}, state.masterParams, data.masterParams);
 		for (const k in state.masterParams) engine.setMasterParam(k, state.masterParams[k]);
 	}
-	if (data.tempoBpm) state.tempoBpm = data.tempoBpm;
+	const tempo = data.tempoBpm != null ? data.tempoBpm : data.tempo;
+	if (tempo != null) state.tempoBpm = tempo;
 	if (data.maxVoices) { state.maxVoices = data.maxVoices; engine.setMaxVoices(data.maxVoices); }
 	state.keyRoot = data.keyRoot != null ? data.keyRoot : state.keyRoot;
 	state.keyScale = data.keyScale != null ? data.keyScale : state.keyScale;
-	state.padKeyBase = data.padKeyBase != null ? data.padKeyBase : state.padKeyBase;
+	const keyBase = data.padKeyBase != null ? data.padKeyBase : data.keyBase;
+	state.padKeyBase = keyBase != null ? keyBase : state.padKeyBase;
 
 	if (data.seq) {
 		state.seq = data.seq.map((t) => ({

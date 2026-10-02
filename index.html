@@ -4,15 +4,14 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Brain Ø / Granular Ø — Web</title>
+	<title>BRAIN 0 — Web</title>
 	<link rel="stylesheet" href="css/shell.css" />
 </head>
 
 <body>
 
 	<div id="tabbar">
-		<button id="tab-btn-ambient" class="tab-btn active" data-tab="ambient">Brain Ø</button>
-		<button id="tab-btn-granular" class="tab-btn" data-tab="granular">GRANULAR Ø</button>
+		<button id="tab-btn-ambient" class="tab-btn active" data-tab="ambient">BRAIN 0</button>
 		<div class="spacer"></div>
 		<button id="stop-btn" class="stop-btn" disabled>Stop Audio</button>
 		<div class="status" id="global-status">idle</div>
@@ -20,24 +19,16 @@
 
 	<div id="panel-ambient" class="tabpanel active">
 		<div class="boot-gate" id="gate-ambient">
-			<div>Brain Ø — 4-layer drone/pad/atmos/noise engine</div>
+			<div>BRAIN 0 — 4-layer drone/pad/atmos/noise engine</div>
 			<button id="boot-ambient">Start Audio</button>
 			<div class="hint">Boots only when you open this tab and press Start — browsers require a user
 				gesture before audio can play, and each engine only loads once you actually need it.</div>
 		</div>
 	</div>
 
-	<div id="panel-granular" class="tabpanel">
-		<div class="boot-gate" id="gate-granular">
-			<div>GRANULAR Ø — CLOUDS / GRAINTOPIA / CHEAT CODES</div>
-			<button id="boot-granular">Start Audio</button>
-			<div class="hint">Boots only when you open this tab and press Start.</div>
-		</div>
-	</div>
-
 	<script type="module">
-		const tabs = ["ambient", "granular"];
-		const loaded = { ambient: false, granular: false };
+		const tabs = ["ambient"];
+		const loaded = { ambient: false };
 		const modules = {}; // instrument -> imported app module
 		const handles = {}; // instrument -> { teardown } returned/attached by mount()
 		const status = document.getElementById("global-status");
@@ -118,9 +109,7 @@
 		});
 
 		document.getElementById("boot-ambient").addEventListener("click", () => bootInstrument("ambient"));
-		document.getElementById("boot-granular").addEventListener("click", () => bootInstrument("granular"));
-
-		// Deep link support: #granular, or ?inst=granular&patch=... from a shared QR/link.
+		// Deep link support for the BRAIN 0 instrument.
 		const params = new URLSearchParams(window.location.search);
 		const wantInstrument = params.get("inst") || window.location.hash.replace("#", "");
 		if (tabs.includes(wantInstrument)) activate(wantInstrument);

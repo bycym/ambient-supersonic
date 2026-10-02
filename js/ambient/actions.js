@@ -4,7 +4,7 @@
 // desync, and side effects (p-lock recording, voice-stopping on mute, etc.)
 // apply no matter which input path triggered them.
 
-import { SPEC_BY_ID, slotDefaults, SCALES } from "./data.js";
+import { SPEC_BY_ID, activeEngineSpecs, slotDefaults, SCALES } from "./data.js";
 import { newStep } from "./sequencer.js";
 
 export function createActions({ state, engine, sequencer, refresh }) {
@@ -30,9 +30,26 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		R();
 	}
 
-	function setStructure(layer, structIdx) {
+	async function setStructure(layer, structIdx) {
+		try { await engine.loadEngineFor(layer, structIdx); }
+		catch (error) {
+			console.error("Engine SynthDef could not load:", error);
+			alert(`Could not load ${layer === 3 ? ["NOISE TEXTURE", "CLOUDS", "GRAINTOPIA"][structIdx - 7] : ["DRONE 1", "DRONE 2", "PAD 1", "PAD 2", "ATMOS 1", "ATMOS 2", "VONGON REPLAY"][structIdx]}: ${error.message}`);
+			R();
+			return;
+		}
 		state.structure[layer] = structIdx;
+		for (const row of activeEngineSpecs(layer, structIdx)) {
+			if (state.lp[layer][row[1]] == null) state.lp[layer][row[1]] = row[5];
+		}
 		engine.layerOff(layer);
+		R();
+	}
+
+	function setGrainSource(srcIdx) {
+		state.grainSrc = srcIdx ? 1 : 0;
+		engine.setGrainSource(state.grainSrc);
+		engine.layerOff(3);
 		R();
 	}
 
@@ -102,9 +119,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	// ---- sequencer step editing (spec §9.4) ------------------------------
 
 	function selectedNoteFor(layer) {
-		const track = state.seq[layer];
-		if (track.selectedStep == null) return 60;
-		return track.steps[track.selectedStep].notes[0];
+		return state.seqNote[layer] ?? 60;
 	}
 
 	function clickStep(layer, idx, defaultNote) {
@@ -116,14 +131,17 @@ export function createActions({ state, engine, sequencer, refresh }) {
 			step.notes = [defaultNote != null ? defaultNote : selectedNoteFor(layer)];
 		}
 		track.selectedStep = idx;
+		state.seqNote[layer] = step.notes[0] ?? selectedNoteFor(layer);
 		R();
 	}
 
 	function setSelectedStepNote(layer, note) {
+		state.seqNote[layer] = note;
 		const track = state.seq[layer];
-		if (track.selectedStep == null) return;
-		const step = track.steps[track.selectedStep];
-		step.notes = [note, ...step.notes.slice(1)];
+		if (track.selectedStep != null) {
+			const step = track.steps[track.selectedStep];
+			step.notes = [note, ...step.notes.slice(1)];
+		}
 		R();
 	}
 
@@ -156,6 +174,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 				track.steps[i].on = false;
 			}
 		}
+		track.selectedStep = null;
 		R();
 	}
 
@@ -243,11 +262,6 @@ export function createActions({ state, engine, sequencer, refresh }) {
 
 	function playNoteMomentary(layer, pitch) {
 		if (state.muted[layer]) return;
-		if (state.playing && !state.seq[layer].mute) {
-			const track = state.seq[layer];
-			const targetIdx = sequencer.nearestStepIndex(layer);
-			if (targetIdx != null) recordStepNote(layer, targetIdx, pitch);
-		}
 		engine.noteOn(layer, pitch, 0.8, state.lp[layer], state.structure[layer], state.noiseSrc, null, state.muted[layer]);
 	}
 	function stopNoteMomentary(layer, pitch) {
@@ -256,6 +270,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 
 	function recordStepNote(layer, idx, pitch) {
 		const track = state.seq[layer];
+		state.seqNote[layer] = pitch;
 		if (!state.playing) {
 			track.selectedStep = idx;
 		}
@@ -288,9 +303,13 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		state.noiseSrc = 9;
 		R();
 	}
+	async function loadGrainSampleFile(file) {
+		await engine.loadGrainSampleFile(file);
+		setGrainSource(1);
+	}
 
 	return {
-		selectLayer, toggleMute, setStructure, setWave, setNoiseSrc,
+		selectLayer, toggleMute, setStructure, setWave, setNoiseSrc, setGrainSource,
 		setLayerParam, setLayerExtra, setMaxVoices, setTempo, setVol, playToggle,
 		clickStep, setSelectedStepNote, setTrackLength, setTrackDiv, toggleRecArm,
 		randomizeTrack, delStep, clrTrack, setLock, clrLock,
@@ -298,7 +317,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive,
 		playNoteMomentary, stopNoteMomentary, recordStepNote, recordStepLength,
 		keyDegreeToPitch,
-		loadSampleFile,
+		loadSampleFile, loadGrainSampleFile,
 		selectedNoteFor,
 	};
 }

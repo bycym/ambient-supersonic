@@ -1478,19 +1478,32 @@ function buildUI(root, gz, pad) {
 		}
 	}
 
-	function showQrModal(gzEngine) {
-		const url = buildShareUrl("granular", gzEngine.serializePatch());
+	async function showQrModal(gzEngine) {
 		const backdrop = el("div", { class: "gz-modal-backdrop", onclick: (e) => { if (e.target === backdrop) backdrop.remove(); } });
 		const modal = el("div", { class: "gz-modal" });
-		modal.appendChild(el("div", { text: "Scan to load this patch:" }));
+		modal.appendChild(el("div", { text: "Preparing share link…" }));
+		backdrop.appendChild(modal);
+		document.body.appendChild(backdrop);
+		try {
+			const url = await buildShareUrl("granular", gzEngine.serializePatch());
+			modal.innerHTML = "";
+			modal.appendChild(el("div", { text: "Scan to load this patch:" }));
 		const qrHolder = el("div");
 		modal.appendChild(qrHolder);
 		const linkRow = el("div", { class: "gz-hint", text: url });
 		modal.appendChild(linkRow);
+			const copyBtn = el("button", { text: "Copy link", onclick: async () => {
+				try { await navigator.clipboard.writeText(url); copyBtn.textContent = "Copied"; }
+				catch { linkRow.textContent = url; }
+			} });
+			modal.appendChild(copyBtn);
 		modal.appendChild(el("button", { text: "Close", onclick: () => backdrop.remove() }));
-		backdrop.appendChild(modal);
-		document.body.appendChild(backdrop);
 		renderShareQr(qrHolder, url);
+		} catch (error) {
+			modal.innerHTML = "";
+			modal.appendChild(el("div", { text: "Could not create QR: " + error.message }));
+			modal.appendChild(el("button", { text: "Close", onclick: () => backdrop.remove() }));
+		}
 	}
 
 	// ---------------------------------------------------------- log -------
@@ -1674,7 +1687,7 @@ export async function mount(panel, gate, audioContext) {
 	buildUI(panel, gz, pad);
 
 	// Deep-link patch load (spec §4): ?patch=...&inst=granular
-	const fromUrl = readPatchFromUrl();
+	const fromUrl = await readPatchFromUrl();
 	if (fromUrl && fromUrl.instrument === "granular" && fromUrl.data) {
 		gz.applyPatch(fromUrl.data);
 	}

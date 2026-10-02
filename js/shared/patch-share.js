@@ -2,7 +2,7 @@
 //   - localStorage save/load (named patches, per-instrument namespace)
 //   - .azpatch-compatible JSON export/import (round-trips with the desktop
 //     SuperCollider script's own save/load format where that instrument has one)
-//   - URL-embeddable share links (?patch=<base64url gzip-free JSON>) + QR code
+//   - URL-embeddable share links (?patch=g1.<base64url gzip>) + QR code
 //     so a patch made on desktop can be scanned open on a phone against the
 //     same page hosted on GitHub Pages.
 //
@@ -58,23 +58,33 @@ export async function importAzpatchFile(file) {
 
 // --- URL share + QR -----------------------------------------------------
 
-function toBase64Url(str) {
-	const bytes = new TextEncoder().encode(str);
+function toBase64Url(bytes) {
 	let bin = "";
-	bytes.forEach((b) => (bin += String.fromCharCode(b)));
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	}
 	return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function fromBase64Url(b64url) {
 	const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
 	const bin = atob(b64 + "===".slice((b64.length + 3) % 4));
-	const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-	return new TextDecoder().decode(bytes);
+	return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
-export function buildShareUrl(ns, data) {
-	const json = JSON.stringify(data);
-	const encoded = toBase64Url(json);
+async function transformBytes(bytes, Transform) {
+	const stream = new Blob([bytes]).stream().pipeThrough(new Transform("gzip"));
+	return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+export async function buildShareUrl(ns, data) {
+	const json = new TextEncoder().encode(JSON.stringify(data));
+	let encoded;
+	if (typeof CompressionStream === "function") {
+		encoded = "g1." + toBase64Url(await transformBytes(json, CompressionStream));
+	} else {
+		encoded = "j1." + toBase64Url(json);
+	}
 	const url = new URL(window.location.href);
 	url.hash = "";
 	url.searchParams.set("patch", encoded);
@@ -82,13 +92,21 @@ export function buildShareUrl(ns, data) {
 	return url.toString();
 }
 
-export function readPatchFromUrl() {
+export async function readPatchFromUrl() {
 	const params = new URLSearchParams(window.location.search);
 	const encoded = params.get("patch");
 	const inst = params.get("inst");
 	if (!encoded) return null;
 	try {
-		return { instrument: inst, data: JSON.parse(fromBase64Url(encoded)) };
+		let bytes;
+		if (encoded.startsWith("g1.")) {
+			if (typeof DecompressionStream !== "function") throw new Error("This browser cannot open compressed patch links");
+			bytes = await transformBytes(fromBase64Url(encoded.slice(3)), DecompressionStream);
+		} else {
+			const legacy = encoded.startsWith("j1.") ? encoded.slice(3) : encoded;
+			bytes = fromBase64Url(legacy);
+		}
+		return { instrument: inst, data: JSON.parse(new TextDecoder().decode(bytes)) };
 	} catch (err) {
 		console.warn("Failed to parse ?patch= URL param:", err);
 		return null;
@@ -98,7 +116,7 @@ export function readPatchFromUrl() {
 // Renders a QR code encoding `url` into `container` (a DOM element), as an
 // inline SVG so it stays crisp at any size and needs no canvas/network.
 export function renderShareQr(container, url) {
-	const qr = qrcode(0, "M");
+	const qr = qrcode(0, "L");
 	qr.addData(url);
 	qr.make();
 

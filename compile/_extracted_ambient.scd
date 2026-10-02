@@ -485,4 +485,85 @@ var nTables = 64, tableSize = 512;
 		var sig = SoundIn.ar([0, 1]);
 		RecordBuf.ar(sig, buf, 0, 1, 0, 1, 0, 1, doneAction: 2);
 	}).add;
+
+	// Added engines ported from ambient_zero_sc.scd.
+	SynthDef(\az_vogon, {
+		arg out = 0, revB = 0, hz = 440, gate = 1, vel = 0.8, amp = 0.2,
+			waveSelect = 1, pwm = 0.5, pwmDepth = 0.3, noiseVol = 0.01,
+			lfoFreq = 3.5, lfoToPitch = 0.003, lfoToFilter = 0.1,
+			cutoff = 1200, resonance = 0.2, envToFilter = 0.4,
+			kbdTracking = 0.5, attack = 0.01, decay = 0.3,
+			sustain = 0.6, release = 0.5, revSend = 0.3;
+		var lfo, freq, env, pulse, osc, signal, fFreq, voice;
+		lfo = SinOsc.kr(lfoFreq);
+		freq = hz * (1 + (lfo * lfoToPitch));
+		pulse = Pulse.ar(freq, (pwm + (lfo * pwmDepth * 0.4)).clip(0.05, 0.95));
+		osc = Select.ar(waveSelect.round.clip(0, 3), [
+			Saw.ar(freq), pulse, LFTri.ar(freq), SinOsc.ar(freq)
+		]);
+		env = EnvGen.kr(Env.adsr(attack, decay, sustain, release, curve: -4), gate, doneAction: 2);
+		signal = osc + WhiteNoise.ar(noiseVol);
+		fFreq = (cutoff + (env * envToFilter * 4000) + (lfo * lfoToFilter * 500)
+			+ (freq * kbdTracking)).clip(20, 20000);
+		voice = MoogFF.ar(signal, fFreq, resonance * 3.5) * env * vel * amp;
+		Out.ar(out, voice ! 2);
+		Out.ar(revB, voice * revSend ! 2);
+	}).add;
+
+	SynthDef(\az_clouds, { |out = 0, revB = 0, buf = 0, headBus = 0,
+		hz = 110, vel = 0.7, gate = 1, pos = 0.1, gsize = 0.4, dens = 0.45,
+		tex = 0.5, pitch = 0, spread = 0.45, jit = 0.15, fb = 0.15,
+		blend = 0, inGain = 1, cut = 14000, res = 0.1, atk = 0.05,
+		rel = 1.2, level = 0.8, pan = 0, revSend = 0.35|
+		var trig, dur, rate, head, p, sig, fbSig, env, rq;
+		var density = dens.clip(0, 1).linexp(0, 1, 0.8, 150);
+		dur = gsize.clip(0, 1).linexp(0, 1, 0.012, 1.5);
+		trig = Select.ar(K2A.ar(tex > 0.5), [Impulse.ar(density), Dust.ar(density)]);
+		head = In.kr(headBus) - 0.02 - (pos * 0.95);
+		p = (head + (TRand.ar(-1, 1, trig) * jit * 0.5)).wrap(0, 1);
+		rate = (hz / 110) * (2 ** (pitch / 12)) * BufRateScale.kr(buf);
+		sig = GrainBuf.ar(2, trig, dur, buf, rate, p, 2,
+			(TRand.ar(-1, 1, trig) * spread) + pan, -1, 512) * 3;
+		sig = sig + (SoundIn.ar(0) ! 2 * blend.clip(0, 1) * inGain.clip(0, 2));
+		fbSig = LocalIn.ar(2);
+		sig = sig + (fbSig * fb.clip(0, 0.9));
+		LocalOut.ar(LeakDC.ar(DelayC.ar(sig, 1, (dur * 2).clip(0.01, 0.95)).tanh));
+		rq = (1 - res).clip(0.05, 1);
+		sig = RLPF.ar(sig, cut.clip(40, 18000), rq);
+		env = EnvGen.kr(Env.asr(atk, 1, rel), gate, doneAction: 2);
+		sig = Balance2.ar(sig[0], sig[1], pan) * env * vel * level;
+		sig = LeakDC.ar(sig.softclip) * 0.22;
+		Out.ar(out, sig);
+		Out.ar(revB, sig * revSend);
+	}).add;
+
+	SynthDef(\az_graintopia, { |out = 0, revB = 0, buf = 0, hz = 110,
+		vel = 0.7, gate = 1, pos = 0.2, speed = 0.2, gsize = 0.4,
+		dens = 0.5, jit = 0.1, spread = 0.5, pitch = 0, cut = 12000,
+		res = 0.15, lofi = 0, atk = 0.05, rel = 0.8, level = 0.7,
+		pan = 0, revSend = 0.3|
+		var trig, dur, rate, scan, p, sig, env, rq, crushed, sr, bits;
+		var density = dens.clip(0, 1).linexp(0, 1, 1, 120);
+		dur = gsize.clip(0, 1).linexp(0, 1, 0.01, 1.2);
+		trig = Impulse.ar(density);
+		scan = speed / BufDur.kr(buf).max(0.05);
+		p = (pos + Phasor.ar(0, scan / SampleRate.ir, 0, 1)
+			+ (TRand.ar(-1, 1, trig) * jit * 0.5)).wrap(0, 1);
+		rate = (hz / 110) * (2 ** (pitch / 12)) * BufRateScale.kr(buf);
+		sig = GrainBuf.ar(2, trig, dur, buf, rate, p, 2,
+			(TRand.ar(-1, 1, trig) * spread) + pan, -1, 512) * 3;
+		// Use standard UGens so this engine does not depend on Decimator.
+		sr = lofi.clip(0, 1).linexp(0, 1, 48000, 900);
+		bits = lofi.clip(0, 1).linlin(0, 1, 24, 3);
+		crushed = Latch.ar(sig, Impulse.ar(sr));
+		crushed = (crushed * (2 ** bits)).round * (2 ** bits.neg);
+		sig = XFade2.ar(sig, crushed, (lofi.clip(0, 1) * 2) - 1);
+		rq = (1 - res).clip(0.05, 1);
+		sig = RLPF.ar(sig, cut.clip(40, 18000), rq);
+		env = EnvGen.kr(Env.asr(atk, 1, rel), gate, doneAction: 2);
+		sig = Balance2.ar(sig[0], sig[1], pan) * env * vel * level;
+		sig = LeakDC.ar(sig.softclip) * 0.22;
+		Out.ar(out, sig);
+		Out.ar(revB, sig * revSend);
+	}).add;
 }];
