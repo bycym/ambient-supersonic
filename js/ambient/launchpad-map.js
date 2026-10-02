@@ -6,7 +6,7 @@
 // §10.7 "GUI/Launchpad synchronization principle").
 
 import { Launchpad, padGidx, padRight, padLeft, padTop, padBottom } from "../shared/launchpad.js";
-import { PAD_C, SPECS, SLOT_SPECS, REVSHIM_SPECS, SCALES, SCALE_NAMES, warpValue, unwarpValue } from "./data.js";
+import { PAD_C, activeEngineSpecs, SLOT_SPECS, REVSHIM_SPECS, SCALES, SCALE_NAMES, warpValue, unwarpValue } from "./data.js";
 
 const CC_DEBOUNCE_GRACE_MS = 250;
 
@@ -59,7 +59,7 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 		}
 	}
 	function getParamNorm(specIdx) {
-		const row = SPECS[specIdx];
+		const row = activeEngineSpecs(state.layerSel, state.structure[state.layerSel])[specIdx];
 		const track = state.seq[state.layerSel];
 		const v = track.selectedStep != null && track.steps[track.selectedStep].locks[row[0]] != null
 			? track.steps[track.selectedStep].locks[row[0]]
@@ -67,8 +67,9 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 		return unwarpValue(row[3], row[4], v, row[7]);
 	}
 	function setParamNorm(specIdx, norm) {
-		const row = SPECS[specIdx];
-		const v = warpValue(row[3], row[4], norm, row[7]);
+		const row = activeEngineSpecs(state.layerSel, state.structure[state.layerSel])[specIdx];
+		let v = warpValue(row[3], row[4], norm, row[7]);
+		if (row[8]) v = Math.round(v);
 		actions.setLayerParam(state.layerSel, row[0], v);
 	}
 	function getFxBypass(fxIdx) {
@@ -146,10 +147,25 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 			rightColPress(row);
 			return;
 		}
+		if (num >= 91 && num <= 98) {
+			leftOrTopPress(num);
+			scheduleRefresh();
+			return;
+		}
 		scheduleRefresh();
 	}
 
 	function handleRelease(num) {
+		if ((num === 91 || num === 92) && state.padLengthHold?.button === num) {
+			const hold = state.padLengthHold;
+			state.padLengthHold = null;
+			if (!hold.used) {
+				const layer = state.layerSel;
+				actions.setTrackLength(layer, state.seq[layer].length + hold.direction * (shiftOn() ? 8 : 1));
+			}
+			scheduleRefresh();
+			return;
+		}
 		if (num >= 11 && num <= 88 && (num % 10) >= 1 && (num % 10) <= 8) {
 			const col = (num % 10) - 1;
 			const row = 7 - (Math.floor(num / 10) - 1);
@@ -167,7 +183,7 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 				stepPress(row * 8 + col);
 			} else if (state.padMode === 1) {
 				const si = state.padPage * 8 + col;
-				if (si < SPECS.length) setParamNorm(si, (7 - row) / 7);
+				if (si < activeEngineSpecs(state.layerSel, state.structure[state.layerSel]).length) setParamNorm(si, (7 - row) / 7);
 			} else if (state.padMode === 2) {
 				if (state.padScaleEdit) scalePick(col, row);
 				else keyDown(col, row, vel);
@@ -179,6 +195,15 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 	function stepPress(idx) {
 		const layer = state.layerSel;
 		const track = state.seq[layer];
+		const hold = state.padLengthHold;
+		if (hold && state.padFocus === "eng" && state.padMode === 0) {
+			const requested = idx + 1;
+			hold.used = true;
+			if ((hold.direction > 0 && requested >= track.length) || (hold.direction < 0 && requested <= track.length)) {
+				actions.setTrackLength(layer, requested);
+			}
+			return;
+		}
 		if (idx >= track.length) return;
 		actions.clickStep(layer, idx);
 	}
@@ -237,8 +262,8 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 		if (num >= 91 && num <= 98) {
 			const layer = state.layerSel;
 			switch (num - 91) {
-				case 0: actions.setTrackLength(layer, state.seq[layer].length + (shiftOn() ? 8 : 1)); break;
-				case 1: actions.setTrackLength(layer, state.seq[layer].length - (shiftOn() ? 8 : 1)); break;
+				case 0: state.padLengthHold = { direction: 1, button: num, used: false }; break;
+				case 1: state.padLengthHold = { direction: -1, button: num, used: false }; break;
 				case 2: if (shiftOn()) actions.clrTrack(layer); else actions.delStep(layer); break;
 				case 3: actions.playToggle(); break;
 				case 4:
@@ -352,7 +377,8 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 				set(padGidx(col, row), c);
 			}
 		} else if (paramMode) {
-			padCols(set, Math.max(0, Math.min(8, SPECS.length - state.padPage * 8)), (col) => getParamNorm(state.padPage * 8 + col), PAD_C.cFill);
+			const count = activeEngineSpecs(layer, state.structure[layer]).length;
+			padCols(set, Math.max(0, Math.min(8, count - state.padPage * 8)), (col) => getParamNorm(state.padPage * 8 + col), PAD_C.cFill);
 		} else {
 			padCols(set, Math.min(8, fxParamCount(state.padFx)), (col) => getFxNorm(state.padFx, col), PAD_C.cFxFill);
 		}

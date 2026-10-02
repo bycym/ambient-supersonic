@@ -3,7 +3,8 @@
 // §10.5 "LED color palette"). Line numbers below refer to the original .scd file.
 
 export const LAYERS = ["DRONE", "PAD", "ATMOS", "NOISE"];
-export const STRUCTURES = ["DRONE 1", "DRONE 2", "PAD 1", "PAD 2", "ATMOS 1", "ATMOS 2"];
+export const STRUCTURES = ["DRONE 1", "DRONE 2", "PAD 1", "PAD 2", "ATMOS 1", "ATMOS 2", "VONGON REPLAY"];
+export const NOISE_STRUCTURES = ["NOISE TEXTURE", "CLOUDS", "GRAINTOPIA"];
 export const MOD_SHAPES = ["SINE", "SQAR", "TRI", "SAW", "R.SAW", "RAND", "S.RND", "LOG", "R.LOG", "PL.10"];
 export const FILTER_NAMES = ["LPF", "BPF", "HPF"];
 export const LFO_DESTS = ["PITCH", "CUTOFF", "HARMONIC", "LEVEL", "PAN", "MOD"];
@@ -78,7 +79,49 @@ export const SPECS = [
 	["glide", "glide", "glide", 0, 5, 0, "s", false],
 	["noisemix", "noiseMix", "noise mix", 0, 1, 0.15, "", false],
 ];
-export const SPEC_BY_ID = Object.fromEntries(SPECS.map((s) => [s[0], s]));
+// Extra engines added to ambient_zero_sc.scd. Rows share the core slider shape:
+// [id, SynthDef control, label, min, max, default, unit, warp, integer].
+export const VONGON_SPECS = [
+	["vWave", "waveSelect", "waveform", 0, 3, 1, "", false, true], ["vPwm", "pwm", "PWM duty", 0.1, 0.9, 0.5, "", false],
+	["vPwmDepth", "pwmDepth", "PWM depth", 0, 1, 0.3, "", false], ["vNoise", "noiseVol", "noise level", 0, 0.12, 0.01, "", false],
+	["vLfoFreq", "lfoFreq", "LFO rate", 0.05, 20, 3.5, "Hz", true], ["vLfoPitch", "lfoToPitch", "LFO to pitch", 0, 0.05, 0.003, "", false],
+	["vLfoFilter", "lfoToFilter", "LFO to filter", 0, 1, 0.1, "", false], ["vCutoff", "cutoff", "cutoff", 40, 10000, 1200, "Hz", true],
+	["vResonance", "resonance", "resonance", 0, 0.95, 0.2, "", false], ["vEnvFilter", "envToFilter", "env to filter", 0, 1, 0.4, "", false],
+	["vTracking", "kbdTracking", "key tracking", 0, 1, 0.5, "", false], ["vAttack", "attack", "attack", 0.005, 3, 0.01, "s", true],
+	["vDecay", "decay", "decay", 0.01, 4, 0.3, "s", true], ["vSustain", "sustain", "sustain", 0, 1, 0.6, "", false],
+	["vRelease", "release", "release", 0.01, 5, 0.5, "s", true], ["vAmp", "amp", "voice level", 0, 0.8, 0.2, "", false],
+	["vReverb", "revSend", "reverb send", 0, 1, 0.3, "", false],
+];
+export const CLOUDS_SPECS = [
+	["cPos", "pos", "position", 0, 1, 0.1, "", false], ["cSize", "gsize", "grain size", 0, 1, 0.4, "", false],
+	["cDensity", "dens", "density", 0, 1, 0.45, "", false], ["cTexture", "tex", "texture", 0, 1, 0.5, "", false],
+	["cPitch", "pitch", "pitch", -24, 24, 0, "st", false], ["cSpread", "spread", "spread", 0, 1, 0.45, "", false],
+	["cJitter", "jit", "jitter", 0, 1, 0.15, "", false], ["cFeedback", "fb", "feedback", 0, 0.9, 0.15, "", false],
+	["cBlend", "blend", "input blend", 0, 1, 0, "", false], ["cInGain", "inGain", "input gain", 0, 2, 1, "", false],
+	["cCut", "cut", "cutoff", 40, 16000, 14000, "Hz", true], ["cRes", "res", "resonance", 0, 0.9, 0.1, "", false],
+	["cAtk", "atk", "attack", 0.005, 8, 0.05, "s", true], ["cRel", "rel", "release", 0.01, 16, 1.2, "s", true],
+	["cLevel", "level", "level", 0, 1, 0.8, "", false], ["cPan", "pan", "pan", -1, 1, 0, "", false],
+	["cSend", "revSend", "reverb send", 0, 1, 0.35, "", false],
+];
+export const GRAINTOPIA_SPECS = [
+	["gPos", "pos", "seek", 0, 1, 0.2, "", false], ["gSpeed", "speed", "scan speed", -2, 2, 0.2, "", false],
+	["gSize", "gsize", "grain size", 0, 1, 0.4, "", false], ["gDensity", "dens", "density", 0, 1, 0.5, "", false],
+	["gJitter", "jit", "jitter", 0, 1, 0.1, "", false], ["gSpread", "spread", "spread", 0, 1, 0.5, "", false],
+	["gPitch", "pitch", "pitch", -24, 24, 0, "st", false], ["gCut", "cut", "cutoff", 40, 16000, 12000, "Hz", true],
+	["gRes", "res", "resonance", 0, 0.9, 0.15, "", false], ["gLofi", "lofi", "lo-fi", 0, 1, 0, "", false],
+	["gAtk", "atk", "attack", 0.005, 8, 0.05, "s", true], ["gRel", "rel", "release", 0.01, 16, 0.8, "s", true],
+	["gLevel", "level", "level", 0, 1, 0.7, "", false], ["gPan", "pan", "pan", -1, 1, 0, "", false],
+	["gSend", "revSend", "reverb send", 0, 1, 0.3, "", false],
+];
+export function activeEngineSpecs(layer, structure) {
+	if (layer === 3) {
+		if (structure === 8) return CLOUDS_SPECS;
+		if (structure === 9) return GRAINTOPIA_SPECS;
+		return SPECS;
+	}
+	return structure === 6 ? VONGON_SPECS : SPECS;
+}
+export const SPEC_BY_ID = Object.fromEntries([...SPECS, ...VONGON_SPECS, ...CLOUDS_SPECS, ...GRAINTOPIA_SPECS].map((s) => [s[0], s]));
 export function specRow(id) { return SPEC_BY_ID[id]; }
 
 // dropdown-backed per-layer extras (§1.6), stored alongside the 25 specs
@@ -90,6 +133,7 @@ export const NOISE_EXTRA_DEFAULTS = { ftype: 0, modShape: 0, l1dest: 1, l2dest: 
 export function defaultLayerParams(layer) {
 	const lp = {};
 	for (const s of SPECS) lp[s[0]] = s[5];
+	for (const s of activeEngineSpecs(layer, layer === 3 ? 8 : 6)) lp[s[0]] = s[5];
 	Object.assign(lp, layer === 3 ? NOISE_EXTRA_DEFAULTS : EXTRA_DEFAULTS);
 	return lp;
 }

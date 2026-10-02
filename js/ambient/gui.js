@@ -3,8 +3,8 @@
 // nothing here mutates state directly.
 
 import {
-	LAYERS, STRUCTURES, MOD_SHAPES, FILTER_NAMES, LFO_DESTS, WAVE_NAMES, NOISE_SRC_NAMES,
-	NOTE_NAMES, SCALE_NAMES, ROOT_NAMES, SEQ_DIV_NAMES, SPECS, SLOT_TYPE_NAMES, SLOT_SPECS,
+	LAYERS, STRUCTURES, NOISE_STRUCTURES, MOD_SHAPES, FILTER_NAMES, LFO_DESTS, WAVE_NAMES, NOISE_SRC_NAMES,
+	NOTE_NAMES, SCALE_NAMES, ROOT_NAMES, SCALES, SEQ_DIV_NAMES, activeEngineSpecs, SLOT_TYPE_NAMES, SLOT_SPECS,
 	REVSHIM_SPECS, MASTER_SPECS, warpValue, unwarpValue, midiFromNoteIndex, noteIndexFromMidi,
 } from "./data.js";
 import * as PatchMod from "./patch.js";
@@ -130,6 +130,10 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		b.addEventListener("click", fn);
 		return b;
 	}
+	function refreshKeySettings() {
+		refresh();
+		launchpad && launchpad.scheduleRefresh();
+	}
 	patchBar.appendChild(mkBtn("LOAD", null, async () => {
 		const data = PatchMod.loadPatch(PatchMod.NS, patchSelect.value);
 		if (!data) return;
@@ -176,16 +180,34 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	qrModal.appendChild(qrBox);
 	document.body.appendChild(qrModal);
 	qrModal.addEventListener("click", (e) => { if (e.target === qrModal) qrModal.classList.add("hidden"); });
-	patchBar.appendChild(mkBtn("Share via QR", null, () => {
-		const url = PatchMod.buildShareUrl(PatchMod.NS, PatchMod.serializePatch(state));
+	patchBar.appendChild(mkBtn("Share via QR", null, async () => {
 		qrBox.innerHTML = "";
-		qrBox.appendChild(el("div", "az-qr-hint", "Scan to load this patch"));
+		qrBox.appendChild(el("div", "az-qr-hint", "Preparing share link…"));
+		qrModal.classList.remove("hidden");
+		try {
+			const url = await PatchMod.buildShareUrl(PatchMod.NS, PatchMod.serializePatch(state));
+			qrBox.innerHTML = "";
+			qrBox.appendChild(el("div", "az-qr-hint", "Scan to load this patch"));
 		const container = el("div");
 		qrBox.appendChild(container);
 		PatchMod.renderShareQr(container, url);
+		const link = el("input", "az-share-link");
+		link.value = url;
+		link.readOnly = true;
+		link.addEventListener("click", () => link.select());
+		qrBox.appendChild(link);
+		const copyBtn = mkBtn("Copy link", null, async () => {
+			try { await navigator.clipboard.writeText(url); copyBtn.textContent = "Copied"; }
+			catch { link.focus(); link.select(); }
+		});
+		qrBox.appendChild(copyBtn);
 		const closeBtn = mkBtn("Close", null, () => qrModal.classList.add("hidden"));
 		qrBox.appendChild(closeBtn);
-		qrModal.classList.remove("hidden");
+		} catch (error) {
+			qrBox.innerHTML = "";
+			qrBox.appendChild(el("div", "az-qr-hint", "Could not create QR: " + error.message));
+			qrBox.appendChild(mkBtn("Close", null, () => qrModal.classList.add("hidden")));
+		}
 	}));
 
 	// ================= Layer tabs =================
@@ -224,6 +246,11 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	let structSelect = selectEl(STRUCTURES, (v) => actions.setStructure(state.layerSel, v));
 	structSelectWrap.appendChild(el("span", null, "structure"));
 	structSelectWrap.appendChild(structSelect);
+	const noiseStructWrap = el("div", "az-field-inline hidden");
+	structSelectWrap.after(noiseStructWrap);
+	noiseStructWrap.appendChild(el("span", null, "engine"));
+	const noiseStructSelect = selectEl(NOISE_STRUCTURES, (v) => actions.setStructure(3, v + 7));
+	noiseStructWrap.appendChild(noiseStructSelect);
 
 	const sampleBtnWrap = el("div", "az-field-inline hidden");
 	const loadSampleBtn = mkBtn("Load Sample...", null, () => sampleFileInput.click());
@@ -235,6 +262,25 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	});
 	sampleBtnWrap.appendChild(sampleFileInput);
 	paramPanel.insertBefore(sampleBtnWrap, dropdownRow);
+	const grainControls = el("div", "az-field-inline hidden");
+	const grainFileInput = el("input");
+	grainFileInput.type = "file"; grainFileInput.accept = "audio/*"; grainFileInput.hidden = true;
+	grainFileInput.addEventListener("change", async () => {
+		if (grainFileInput.files[0]) await actions.loadGrainSampleFile(grainFileInput.files[0]);
+		grainFileInput.value = "";
+	});
+	const grainLoadBtn = mkBtn("Load Grain WAV...", null, () => grainFileInput.click());
+	let grainRecorder = null;
+	const grainCaptureBtn = mkBtn("Capture Mic", null, async () => {
+		if (grainRecorder) { grainRecorder.stop(); grainRecorder = null; grainCaptureBtn.textContent = "Capture Mic"; }
+		else {
+			grainCaptureBtn.textContent = "Stop Capture";
+			try { grainRecorder = await engine.startGrainCapture(() => { grainRecorder = null; grainCaptureBtn.textContent = "Capture Mic"; actions.setGrainSource(0); }); }
+			catch (err) { grainCaptureBtn.textContent = "Capture Mic"; alert("Microphone capture failed: " + err.message); }
+		}
+	});
+	grainControls.append(grainLoadBtn, grainCaptureBtn, grainFileInput);
+	paramPanel.insertBefore(grainControls, dropdownRow);
 
 	const waveWrap = el("div", "az-field-inline");
 	dropdownRow.appendChild(waveWrap);
@@ -265,41 +311,55 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	l2destWrap.appendChild(el("span", null, "lfo2 dest"));
 	const l2destSelect = selectEl(LFO_DESTS, (v) => actions.setLayerExtra(state.layerSel, "l2dest", v));
 	l2destWrap.appendChild(l2destSelect);
+	const extraControlWraps = [filterWrap, modShapeWrap, l1destWrap, l2destWrap];
 
 	const sliderGrid = el("div", "az-slider-grid");
 	paramPanel.appendChild(sliderGrid);
-	const sliderRows = SPECS.map((row) => {
-		const [id, key, name, lo, hi, def, unit, warp] = row;
-		const rowEl = el("div", "az-slider-row");
-		rowEl.appendChild(el("span", "az-slider-label", name));
-		const range = el("input");
-		range.type = "range"; range.min = 0; range.max = 1; range.step = 0.001;
-		rowEl.appendChild(range);
-		const readout = el("span", "az-slider-val", "");
-		rowEl.appendChild(readout);
-		range.addEventListener("input", () => {
-			const v = warpValue(lo, hi, parseFloat(range.value), warp);
-			actions.setLayerParam(state.layerSel, id, v);
+	let sliderRows = [];
+	let sliderSpecKey = "";
+	function rebuildLayerSliders(specs) {
+		sliderGrid.innerHTML = "";
+		sliderRows = specs.map((row) => {
+			const [id, key, name, lo, hi, def, unit, warp, integer] = row;
+			const rowEl = el("div", "az-slider-row");
+			rowEl.appendChild(el("span", "az-slider-label", name));
+			const range = el("input");
+			range.type = "range"; range.min = 0; range.max = 1; range.step = integer ? 1 / Math.max(1, hi - lo) : 0.001;
+			rowEl.appendChild(range);
+			const readout = el("span", "az-slider-val", "");
+			rowEl.appendChild(readout);
+			range.addEventListener("input", () => {
+				let v = warpValue(lo, hi, parseFloat(range.value), warp);
+				if (integer) v = Math.round(v);
+				actions.setLayerParam(state.layerSel, id, v);
+			});
+			sliderGrid.appendChild(rowEl);
+			return { id, key, lo, hi, unit, warp, range, readout };
 		});
-		sliderGrid.appendChild(rowEl);
-		return { id, key, lo, hi, unit, warp, range, readout };
-	});
+	}
 
 	// ---- Sequencer panel ----
 	const seqPanel = el("div", "az-panel az-seq");
 	body.appendChild(seqPanel);
 	seqPanel.appendChild(el("div", "az-panel-title", "SEQUENCER"));
+	const viewToolbar = el("div", "az-field-row az-view-toolbar");
+	seqPanel.appendChild(viewToolbar);
+	const viewButtons = ["SEQUENCER", "LAUNCHPAD"].map((name, view) => mkBtn(name, null, () => {
+		state.controlView = view;
+		refresh();
+	}));
+	viewButtons.forEach((button) => viewToolbar.appendChild(button));
 
 	const keysRow = el("div", "az-field-row");
 	seqPanel.appendChild(keysRow);
 	keysRow.appendChild(el("span", null, "keys:"));
-	const rootSelect = selectEl(ROOT_NAMES, (v) => { state.keyRoot = v; refresh(); });
+	const rootSelect = selectEl(ROOT_NAMES, (v) => { state.keyRoot = v; refreshKeySettings(); });
 	keysRow.appendChild(rootSelect);
-	const scaleSelect = selectEl(SCALE_NAMES, (v) => { state.keyScale = v; refresh(); });
+	const scaleSelect = selectEl(SCALE_NAMES, (v) => { state.keyScale = v; refreshKeySettings(); });
 	keysRow.appendChild(scaleSelect);
 	const octInput = el("input");
 	octInput.type = "number"; octInput.min = -1; octInput.max = 7; octInput.step = 1;
-	octInput.addEventListener("input", () => { state.padKeyBase = (parseInt(octInput.value, 10) + 1) * 12; refresh(); });
+	octInput.addEventListener("input", () => { state.padKeyBase = (parseInt(octInput.value, 10) + 1) * 12; refreshKeySettings(); });
 	keysRow.appendChild(el("span", null, "oct"));
 	keysRow.appendChild(octInput);
 
@@ -337,6 +397,108 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		stepBtns.push(b);
 	}
 
+	const gridView = el("div", "az-launch-grid-view");
+	seqPanel.appendChild(gridView);
+	const gridToolbar = el("div", "az-field-row");
+	gridView.appendChild(gridToolbar);
+	const gridModeButtons = ["STEP", "PARAM", "KEYS"].map((name, mode) => mkBtn(name, null, () => { state.padFocus = "eng"; state.padMode = mode; refresh(); }));
+	gridModeButtons.forEach((b) => gridToolbar.appendChild(b));
+	["FX1", "FX2", "FX3", "REV"].forEach((name, fx) => gridToolbar.appendChild(mkBtn(name, null, () => { state.padFocus = "fx"; state.padFx = fx; refresh(); })));
+	const gridPageSelect = selectEl(["PAGE 1", "PAGE 2", "PAGE 3", "PAGE 4"], (page) => { state.padPage = page; refresh(); });
+	gridToolbar.appendChild(gridPageSelect);
+	const gridKeysWrap = el("div", "az-field-row");
+	gridView.appendChild(gridKeysWrap);
+	const gridRootSelect = selectEl(ROOT_NAMES, (v) => { state.keyRoot = v; refreshKeySettings(); });
+	const gridScaleSelect = selectEl(SCALE_NAMES, (v) => { state.keyScale = v; refreshKeySettings(); });
+	const gridKeyLabel = el("strong", "az-key-label");
+	gridKeysWrap.append(gridKeyLabel, gridRootSelect, gridScaleSelect);
+	const keyLatchBtn = mkBtn("LATCH OFF", "az-key-latch", () => {
+		const layer = state.layerSel;
+		state.padLatchMode[layer] = !state.padLatchMode[layer];
+		if (!state.padLatchMode[layer]) {
+			for (const held of state.padLatched.slice()) {
+				if (held.layer !== layer) continue;
+				state.padLatched.splice(state.padLatched.indexOf(held), 1);
+				actions.stopNoteMomentary(held.layer, held.pitch);
+				if (held.step != null) actions.recordStepLength(held.layer, held.step, (performance.now() - held.t0) / 1000);
+			}
+		}
+		refresh();
+		launchpad && launchpad.scheduleRefresh();
+	});
+	gridKeysWrap.appendChild(keyLatchBtn);
+	const screenGrid = el("div", "az-control-grid");
+	gridView.appendChild(screenGrid);
+	const screenPads = [];
+	const screenHeld = new Map();
+	for (let idx = 0; idx < 64; idx++) {
+		const col = idx % 8, row = Math.floor(idx / 8);
+		const pad = el("button", "az-control-pad");
+		pad.addEventListener("click", () => {
+			const layer = state.layerSel;
+			if (state.padFocus === "fx") {
+				const specs = state.padFx === 3 ? REVSHIM_SPECS : SLOT_SPECS[state.slotType[state.padFx]];
+				if (col < specs.length) {
+					const [label, key, lo, hi, def, warp] = specs[col];
+					const v = warpValue(lo, hi, (7 - row) / 7, warp);
+					if (state.padFx === 3) actions.setRevShimParam(key, v); else actions.setSlotParam(state.padFx, key, v);
+				}
+			} else if (state.padMode === 0) actions.clickStep(layer, row * 8 + col);
+			else if (state.padMode === 1) {
+				const spec = activeEngineSpecs(layer, state.structure[layer])[state.padPage * 8 + col];
+				if (spec) {
+					let value = warpValue(spec[3], spec[4], (7 - row) / 7, spec[7]);
+					if (spec[8]) value = Math.round(value);
+					actions.setLayerParam(layer, spec[0], value);
+				}
+			}
+		});
+		pad.addEventListener("pointerdown", (event) => {
+			if (state.padFocus !== "eng" || state.padMode !== 2) return;
+			event.preventDefault();
+			const scale = SCALES[state.keyScale], degree = (7 - row) * scale.length + col;
+			const pitch = state.padKeyBase + state.keyRoot + Math.floor(degree / scale.length) * 12 + scale[degree % scale.length];
+			if (pitch > 127 || screenHeld.has(idx)) return;
+			const layer = state.layerSel;
+			const alreadyLatched = state.padLatched.find((held) => held.layer === layer && held.pitch === pitch);
+			if (alreadyLatched) {
+				state.padLatched.splice(state.padLatched.indexOf(alreadyLatched), 1);
+				actions.stopNoteMomentary(layer, pitch);
+				if (alreadyLatched.step != null) actions.recordStepLength(layer, alreadyLatched.step, (performance.now() - alreadyLatched.t0) / 1000);
+				refresh();
+				launchpad && launchpad.scheduleRefresh();
+				return;
+			}
+			actions.playNoteMomentary(layer, pitch);
+			let step = null;
+			if (state.recArm) {
+				step = state.playing ? sequencer.nearestStepIndex(layer) : (state.seq[layer].selectedStep ?? 0);
+				if (step != null) actions.recordStepNote(layer, step, pitch);
+			}
+			const held = { layer, pitch, step, t0: performance.now(), latch: !!state.padLatchMode[layer] };
+			if (held.latch) state.padLatched.push(held);
+			screenHeld.set(idx, held);
+			refresh();
+			launchpad && launchpad.scheduleRefresh();
+			pad.setPointerCapture?.(event.pointerId);
+		});
+		const releaseScreenKey = () => {
+			const held = screenHeld.get(idx);
+			if (!held) return;
+			screenHeld.delete(idx);
+			if (held.latch) return;
+			actions.stopNoteMomentary(held.layer, held.pitch);
+			if (held.step != null) actions.recordStepLength(held.layer, held.step, (performance.now() - held.t0) / 1000);
+			refresh();
+			launchpad && launchpad.scheduleRefresh();
+		};
+		pad.addEventListener("pointerup", releaseScreenKey);
+		pad.addEventListener("pointercancel", releaseScreenKey);
+		pad.addEventListener("lostpointercapture", releaseScreenKey);
+		screenGrid.appendChild(pad);
+		screenPads.push(pad);
+	}
+
 	const chordReadout = el("div", "az-chord", "(select a step)");
 	seqPanel.appendChild(chordReadout);
 
@@ -346,7 +508,11 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	lockPanel.appendChild(el("div", "az-panel-title", "PARAM LOCK"));
 	const lockRow = el("div", "az-field-row");
 	lockPanel.appendChild(lockRow);
-	const lockParamSelect = selectEl(SPECS.map((s) => s[2]), (v) => { state.lockSpecId = SPECS[v][0]; refresh(); });
+	const lockParamSelect = selectEl([], (v) => {
+		const row = activeEngineSpecs(state.layerSel, state.structure[state.layerSel])[v];
+		if (row) state.lockSpecId = row[0];
+		refresh();
+	});
 	lockRow.appendChild(lockParamSelect);
 	const lockSlider = el("input");
 	lockSlider.type = "range"; lockSlider.min = 0; lockSlider.max = 1; lockSlider.step = 0.001;
@@ -354,18 +520,22 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	const lockReadout = el("span", null, "");
 	lockRow.appendChild(lockReadout);
 	lockSlider.addEventListener("input", () => {
-		const row = SPECS.find((s) => s[0] === state.lockSpecId);
+		const row = activeEngineSpecs(state.layerSel, state.structure[state.layerSel]).find((s) => s[0] === state.lockSpecId);
 		lockReadout.textContent = fmtVal(warpValue(row[3], row[4], parseFloat(lockSlider.value), row[7]), row[6]);
 	});
 	const lockBtnRow = el("div", "az-field-row");
 	lockPanel.appendChild(lockBtnRow);
 	lockBtnRow.appendChild(mkBtn("SET LOCK", null, () => {
-		const row = SPECS.find((s) => s[0] === state.lockSpecId);
-		actions.setLock(state.layerSel, state.lockSpecId, warpValue(row[3], row[4], parseFloat(lockSlider.value), row[7]));
+		const row = activeEngineSpecs(state.layerSel, state.structure[state.layerSel]).find((s) => s[0] === state.lockSpecId);
+		if (!row) return;
+		let value = warpValue(row[3], row[4], parseFloat(lockSlider.value), row[7]);
+		if (row[8]) value = Math.round(value);
+		actions.setLock(state.layerSel, state.lockSpecId, value);
 	}));
 	lockBtnRow.appendChild(mkBtn("CLR LOCK", null, () => actions.clrLock(state.layerSel, state.lockSpecId)));
 	const lockStatus = el("div", "az-lock-status", "(select a step)");
 	lockPanel.appendChild(lockStatus);
+	const sequencerOnly = [keysRow, noteRow, seqBtnRow, grid, chordReadout, lockPanel];
 
 	// ================= FX chain =================
 	const fxChain = el("div", "az-panel az-fxchain");
@@ -465,32 +635,53 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	// ================= refresh =================
 
 	function refresh() {
+		const isLaunchpadView = state.controlView === 1;
+		viewButtons.forEach((button, i) => {
+			button.classList.toggle("active", i === state.controlView);
+			button.setAttribute("aria-pressed", String(i === state.controlView));
+		});
+		sequencerOnly.forEach((node) => node.classList.toggle("hidden", isLaunchpadView));
+		gridView.classList.toggle("hidden", !isLaunchpadView);
 		tabBtns.forEach((b, i) => b.classList.toggle("active", i === state.layerSel));
 		muteBtns.forEach((b, i) => b.classList.toggle("active", state.muted[i]));
 
 		const layer = state.layerSel;
 		const isTonal = layer <= 2;
-		structLabel.textContent = LAYERS[layer] + " -- " + (isTonal ? STRUCTURES[state.structure[layer]] : "NOISE");
+		const isNoise = layer === 3 && state.structure[layer] === 7;
+		const isGrain = layer === 3 && state.structure[layer] >= 8;
+		const activeSpecs = activeEngineSpecs(layer, state.structure[layer]);
+		const specKey = layer + ":" + state.structure[layer];
+		if (sliderSpecKey !== specKey) { sliderSpecKey = specKey; rebuildLayerSliders(activeSpecs); }
+		structLabel.textContent = LAYERS[layer] + " -- " + (isTonal ? STRUCTURES[state.structure[layer]] : NOISE_STRUCTURES[state.structure[layer] - 7]);
 		structSelectWrap.classList.toggle("hidden", !isTonal);
-		sampleBtnWrap.classList.toggle("hidden", !(layer === 3 && state.noiseSrc === 9));
+		noiseStructWrap.classList.toggle("hidden", isTonal);
 		if (isTonal) structSelect.value = state.structure[layer];
+		else noiseStructSelect.value = state.structure[layer] - 7;
+		sampleBtnWrap.classList.toggle("hidden", !(isNoise && state.noiseSrc === 9));
+		grainControls.classList.toggle("hidden", !isGrain);
+		extraControlWraps.forEach((wrap) => wrap.classList.toggle("hidden", !isNoise && !isTonal || (isTonal && state.structure[layer] === 6)));
 
-		waveWrap.querySelector("span").textContent = isTonal ? "wave" : "source";
-		const waveOptions = isTonal ? WAVE_NAMES : NOISE_SRC_NAMES;
-		if (waveSelect.dataset.mode !== (isTonal ? "wave" : "noise")) {
+		waveWrap.classList.toggle("hidden", !(isTonal || isNoise || isGrain));
+		waveWrap.querySelector("span").textContent = isTonal ? "wave" : isNoise ? "source" : "grain source";
+		const mode = isTonal ? "wave" : isNoise ? "noise" : "grain";
+		const waveOptions = isTonal ? WAVE_NAMES : isNoise ? NOISE_SRC_NAMES : ["LINE IN", "WAV FILE"];
+		if (waveSelect.dataset.mode !== mode) {
 			waveSelect.innerHTML = "";
 			waveOptions.forEach((label, i) => { const o = el("option", null, label); o.value = i; waveSelect.appendChild(o); });
-			waveSelect.dataset.mode = isTonal ? "wave" : "noise";
+			waveSelect.dataset.mode = mode;
 			waveSelect.onchange = () => {
 				const v = parseInt(waveSelect.value, 10);
 				if (isTonal) actions.setWave(layer, v);
-				else {
+				else if (isNoise) {
 					actions.setNoiseSrc(v);
 					if (v === 9 && !state.usrChans) sampleFileInput.click();
+				} else {
+					actions.setGrainSource(v);
+					if (v === 1) grainFileInput.click();
 				}
 			};
 		}
-		waveSelect.value = isTonal ? Math.max(0, state.curWave[layer]) : state.noiseSrc;
+		waveSelect.value = isTonal ? Math.max(0, state.curWave[layer]) : isNoise ? state.noiseSrc : state.grainSrc;
 
 		const lp = state.lp[layer];
 		filterSelect.value = lp.ftype;
@@ -499,6 +690,59 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		l2destSelect.value = lp.l2dest;
 
 		const track = state.seq[layer];
+		gridModeButtons.forEach((b, i) => b.classList.toggle("active", state.padFocus === "eng" && state.padMode === i));
+		[...gridToolbar.querySelectorAll("button")].slice(3).forEach((b, i) => b.classList.toggle("active", state.padFocus === "fx" && state.padFx === i));
+		gridPageSelect.value = state.padPage;
+		gridPageSelect.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 1);
+		gridKeysWrap.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2);
+		gridRootSelect.value = state.keyRoot;
+		gridScaleSelect.value = state.keyScale;
+		gridKeyLabel.textContent = ROOT_NAMES[state.keyRoot] + " " + SCALE_NAMES[state.keyScale];
+		keyLatchBtn.classList.toggle("active", !!state.padLatchMode[layer]);
+		keyLatchBtn.textContent = state.padLatchMode[layer] ? "LATCH ON" : "LATCH OFF";
+		keyLatchBtn.setAttribute("aria-pressed", String(!!state.padLatchMode[layer]));
+		keyLatchBtn.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2);
+		const padSpecs = activeEngineSpecs(layer, state.structure[layer]);
+		for (let i = 0; i < 64; i++) {
+			const pad = screenPads[i], col = i % 8, row = Math.floor(i / 8);
+			pad.textContent = "";
+			pad.className = "az-control-pad";
+			pad.disabled = false;
+			if (state.padFocus === "fx") {
+				const specs = state.padFx === 3 ? REVSHIM_SPECS : SLOT_SPECS[state.slotType[state.padFx]];
+				const spec = specs[col];
+				if (spec) { const value = state.padFx === 3 ? state.revShimParams[spec[1]] : state.slotParams[state.padFx][spec[1]]; const level = Math.round(unwarpValue(spec[2], spec[3], value, spec[5]) * 7); pad.classList.toggle("on", 7 - row <= level); pad.title = spec[0]; }
+			} else if (state.padMode === 0) {
+				const idx = row * 8 + col, step = track.steps[idx];
+				pad.textContent = String(idx + 1);
+				pad.classList.toggle("on", idx < track.length && step.on);
+				pad.classList.toggle("selected", track.selectedStep === idx);
+				pad.classList.toggle("playhead", state.playing && track.pos === idx);
+				pad.disabled = idx >= track.length;
+			} else if (state.padMode === 1) {
+				const spec = padSpecs[state.padPage * 8 + col];
+				if (spec) { const value = state.lp[layer][spec[1]]; const level = Math.round(unwarpValue(spec[3], spec[4], value, spec[7]) * 7); pad.classList.toggle("on", 7 - row <= level); pad.title = spec[2] + ": " + fmtVal(value, spec[6]); }
+				else pad.disabled = true;
+			} else {
+				const scale = SCALES[state.keyScale], degree = (7 - row) * scale.length + col;
+				const pitch = state.padKeyBase + state.keyRoot + Math.floor(degree / scale.length) * 12 + scale[degree % scale.length];
+				const pitchClass = ((pitch % 12) + 12) % 12;
+				const octave = Math.floor(pitch / 12) - 1;
+				const latched = state.padLatched.some((held) => held.layer === layer && held.pitch === pitch);
+				const held = [...screenHeld.values()].some((entry) => entry.layer === layer && entry.pitch === pitch);
+				pad.textContent = pitch <= 127 ? ROOT_NAMES[pitchClass] + octave : "";
+				pad.classList.add("az-key-pad", "az-octave-" + ((octave + 1) % 7));
+				pad.classList.toggle("root-note", degree % scale.length === 0);
+				pad.classList.toggle("latched", latched);
+				pad.classList.toggle("held", held);
+				pad.title = pitch <= 127 ? `${ROOT_NAMES[state.keyRoot]} ${SCALE_NAMES[state.keyScale]} · degree ${(degree % scale.length) + 1} · ${ROOT_NAMES[pitchClass]}${octave}` : "Out of MIDI range";
+				pad.disabled = pitch > 127;
+			}
+		}
+		lockParamSelect.innerHTML = "";
+		activeSpecs.forEach((row, i) => { const opt = el("option", null, row[2]); opt.value = i; opt.dataset.id = row[0]; lockParamSelect.appendChild(opt); });
+		if (!activeSpecs.some((row) => row[0] === state.lockSpecId)) state.lockSpecId = activeSpecs[0][0];
+		lockParamSelect.value = activeSpecs.findIndex((row) => row[0] === state.lockSpecId);
 		for (const s of sliderRows) {
 			const locked = track.selectedStep != null && track.steps[track.selectedStep].locks[s.id] !== undefined;
 			const v = locked ? track.steps[track.selectedStep].locks[s.id] : lp[s.key];
@@ -518,7 +762,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		rootSelect.value = state.keyRoot;
 		scaleSelect.value = state.keyScale;
 		octInput.value = Math.round(state.padKeyBase / 12) - 1;
-		noteSelect.value = noteIndexFromMidi(track.selectedStep != null ? track.steps[track.selectedStep].notes[0] : 60);
+		noteSelect.value = noteIndexFromMidi(state.seqNote[layer] ?? 60);
 		lenInput.value = track.length;
 		divSelect.value = track.div;
 
@@ -535,13 +779,20 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		if (track.selectedStep != null) {
 			const st = track.steps[track.selectedStep];
 			chordReadout.textContent = "notes: " + st.notes.map((n) => NOTE_NAMES[noteIndexFromMidi(n)]).join(",") + `  vel:${st.vel.toFixed(2)}  len:${st.len.toFixed(2)}`;
-			const lockNames = Object.keys(st.locks).map((id) => SPECS.find((s) => s[0] === id)[2]);
+			const lockNames = Object.keys(st.locks).map((id) => activeSpecs.find((s) => s[0] === id)?.[2] || id);
 			lockStatus.textContent = lockNames.length ? "locks: " + lockNames.join(", ") : "no locks on this step";
 		} else {
 			chordReadout.textContent = "(select a step)";
 			lockStatus.textContent = "(select a step)";
 		}
-		lockParamSelect.value = SPECS.findIndex((s) => s[0] === state.lockSpecId);
+		const activeLockRow = activeSpecs.find((s) => s[0] === state.lockSpecId);
+		if (activeLockRow) {
+			lockParamSelect.value = activeSpecs.indexOf(activeLockRow);
+			const lockValue = track.selectedStep != null && track.steps[track.selectedStep].locks[state.lockSpecId] != null
+				? track.steps[track.selectedStep].locks[state.lockSpecId] : state.lp[layer][activeLockRow[1]];
+			lockSlider.value = unwarpValue(activeLockRow[3], activeLockRow[4], lockValue, activeLockRow[7]);
+			lockReadout.textContent = fmtVal(lockValue, activeLockRow[6]);
+		}
 
 		slotBoxes.forEach((b) => b.refresh());
 		revShimBox.refresh();
