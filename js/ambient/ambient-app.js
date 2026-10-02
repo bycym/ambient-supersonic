@@ -82,7 +82,7 @@ export async function mount(panel, gate, audioContext) {
 	// Deep-link patch load (spec: "On mount, call readPatchFromUrl() first...")
 	const fromUrl = await PatchMod.readPatchFromUrl();
 	if (fromUrl && fromUrl.instrument === "ambient" && fromUrl.data) {
-		await PatchMod.applyPatch(state, fromUrl.data, { engine, refreshAll });
+		await PatchMod.applyPatch(state, fromUrl.data, { engine, sequencer, refreshAll });
 	} else {
 		refreshAll();
 	}

@@ -137,7 +137,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	patchBar.appendChild(mkBtn("LOAD", null, async () => {
 		const data = PatchMod.loadPatch(PatchMod.NS, patchSelect.value);
 		if (!data) return;
-		await PatchMod.applyPatch(state, data, { engine, refreshAll: refresh });
+		await PatchMod.applyPatch(state, data, { engine, sequencer, refreshAll: refresh });
 		state.currentPatchName = patchSelect.value;
 		nameField.value = patchSelect.value;
 	}));
@@ -170,10 +170,27 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	importInput.addEventListener("change", async () => {
 		if (!importInput.files[0]) return;
 		const data = await PatchMod.importAzpatchFile(importInput.files[0]);
-		await PatchMod.applyPatch(state, data, { engine, refreshAll: refresh });
+		await PatchMod.applyPatch(state, data, { engine, sequencer, refreshAll: refresh });
 	});
 	patchBar.appendChild(importInput);
 	patchBar.appendChild(mkBtn("Import .azpatch", null, () => importInput.click()));
+	patchBar.appendChild(mkBtn("Copy Patch", null, async () => {
+		try {
+			await navigator.clipboard.writeText(JSON.stringify(PatchMod.serializePatch(state)));
+		} catch (error) {
+			alert("Could not copy patch: " + error.message);
+		}
+	}));
+	patchBar.appendChild(mkBtn("Paste Patch", null, async () => {
+		try {
+			const data = JSON.parse(await navigator.clipboard.readText());
+			await PatchMod.applyPatch(state, data, { engine, sequencer, refreshAll: refresh });
+			state.currentPatchName = "clipboard_patch";
+			nameField.value = state.currentPatchName;
+		} catch (error) {
+			alert("Could not paste patch: " + error.message);
+		}
+	}));
 
 	const qrModal = el("div", "az-qr-modal hidden");
 	const qrBox = el("div", "az-qr-box");
