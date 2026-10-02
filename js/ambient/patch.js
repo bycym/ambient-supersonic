@@ -37,7 +37,7 @@ export function serializePatch(state) {
 // single-note migration (spec §8.3 step 9) and "missing key -> keep current"
 // forward-compat fallback (spec §8.3 step 8).
 export async function applyPatch(state, data, ctx) {
-	const { engine, refreshAll } = ctx;
+	const { engine, sequencer, refreshAll } = ctx;
 
 	for (let i = 0; i < 4; i++) {
 		state.lp[i] = Object.assign(defaultLayerParams(i), data.lp && data.lp[i] ? data.lp[i] : {});
@@ -85,7 +85,10 @@ export async function applyPatch(state, data, ctx) {
 		for (const k in state.masterParams) engine.setMasterParam(k, state.masterParams[k]);
 	}
 	const tempo = data.tempoBpm != null ? data.tempoBpm : data.tempo;
-	if (tempo != null) state.tempoBpm = tempo;
+	if (tempo != null) {
+		state.tempoBpm = tempo;
+		sequencer && sequencer.setTempo(tempo);
+	}
 	if (data.maxVoices) { state.maxVoices = data.maxVoices; engine.setMaxVoices(data.maxVoices); }
 	state.keyRoot = data.keyRoot != null ? data.keyRoot : state.keyRoot;
 	state.keyScale = data.keyScale != null ? data.keyScale : state.keyScale;
@@ -93,7 +96,7 @@ export async function applyPatch(state, data, ctx) {
 	state.padKeyBase = keyBase != null ? keyBase : state.padKeyBase;
 
 	if (data.seq) {
-		state.seq = data.seq.map((t) => ({
+		const importedTracks = data.seq.map((t) => ({
 			steps: (t.steps || []).map((s) => ({
 				on: !!s.on,
 				notes: (s.notes || (s.note != null ? [s.note] : [60])).slice(),
@@ -105,7 +108,19 @@ export async function applyPatch(state, data, ctx) {
 			div: t.div != null ? t.div : 7,
 			pos: -1, stepTime: 0, mute: false,
 		}));
-		while (state.seq.length < 4) state.seq.push({ steps: Array.from({ length: 64 }, () => ({ on: false, notes: [60], vel: 0.8, len: 0.9, locks: {} })), length: 16, div: 7, pos: -1, stepTime: 0, mute: false });
+		while (state.seq.length < 4) state.seq.push({ steps: [], length: 16, div: 7, pos: -1, stepTime: 0, mute: false });
+		for (let i = 0; i < 4; i++) {
+			const incoming = importedTracks[i] || { steps: [], length: 16, div: 7 };
+			const target = state.seq[i];
+			target.steps = incoming.steps.slice(0, 64);
+			while (target.steps.length < 64) target.steps.push({ on: false, notes: [60], vel: 0.8, len: 0.9, locks: {} });
+			target.length = incoming.length;
+			target.div = incoming.div;
+			target.pos = -1;
+			target.stepTime = 0;
+			target.mute = false;
+			target.selectedStep = null;
+		}
 	}
 
 	refreshAll && refreshAll();
