@@ -116,6 +116,7 @@ export async function mount(panel, gate, audioContext) {
 	async function teardown() {
 		if (meterTimer) clearInterval(meterTimer);
 		sequencer.stop();
+		sequencer.setMetronome(false);
 		await launchpad.disconnect().catch(() => {});
 		engine.teardown();
 		await teardownEngine(sonic);

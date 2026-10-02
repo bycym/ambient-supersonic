@@ -24,6 +24,9 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	let playing = false;
 	let tempoBpm = 120;
 	let timer = null;
+	let metronomeOn = false;
+	let beatOrigin = 0;
+	let nextClickTime = 0;
 	const LOOKAHEAD_MS = 25;
 	const SCHEDULE_AHEAD_S = 0.12;
 
@@ -42,14 +45,55 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	function stepBeatDur(track) { return 1 / SEQ_DIVS[track.div]; }
 	function stepSecDur(track) { return stepBeatDur(track) * (60 / tempoBpm); }
 
+	function ensureTimer() {
+		if (!timer && (playing || metronomeOn)) timer = setInterval(tick, LOOKAHEAD_MS);
+	}
+
+	function stopTimerIfIdle() {
+		if (!playing && !metronomeOn && timer) {
+			clearInterval(timer);
+			timer = null;
+		}
+	}
+
+	function beatDur() { return 60 / tempoBpm; }
+
+	function nextBeatAfter(time) {
+		const dur = beatDur();
+		return beatOrigin + (Math.floor((time - beatOrigin) / dur) + 1) * dur;
+	}
+
+	function scheduleClick(when, beat) {
+		if (!audioContext) return;
+		// Direct destination connection keeps click out of sonic.node master recording.
+		const osc = audioContext.createOscillator();
+		const gain = audioContext.createGain();
+		osc.frequency.value = beat % 4 === 0 ? 1200 : 850;
+		gain.gain.setValueAtTime(0.0001, when);
+		gain.gain.exponentialRampToValueAtTime(0.35, when + 0.002);
+		gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+		osc.connect(gain);
+		gain.connect(audioContext.destination);
+		osc.start(when);
+		osc.stop(when + 0.05);
+		osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+	}
+
 	function tick() {
 		const t = now();
-		for (let layer = 0; layer < 4; layer++) {
-			const track = tracks[layer];
-			while (nextStepTime[layer] < t + SCHEDULE_AHEAD_S) {
-				scheduleStep(layer, track, nextStepTime[layer]);
-				nextStepTime[layer] += stepSecDur(track);
+		if (playing) {
+			for (let layer = 0; layer < 4; layer++) {
+				const track = tracks[layer];
+				while (nextStepTime[layer] < t + SCHEDULE_AHEAD_S) {
+					scheduleStep(layer, track, nextStepTime[layer]);
+					nextStepTime[layer] += stepSecDur(track);
+				}
 			}
+		}
+		while (metronomeOn && nextClickTime < t + SCHEDULE_AHEAD_S) {
+			const beat = Math.max(0, Math.round((nextClickTime - beatOrigin) / beatDur()));
+			scheduleClick(nextClickTime, beat);
+			nextClickTime += beatDur();
 		}
 	}
 
@@ -81,21 +125,36 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		if (playing) return;
 		playing = true;
 		const t = now();
+		const startAt = metronomeOn ? nextBeatAfter(t) : t + 0.05;
+		if (!metronomeOn) beatOrigin = startAt;
 		for (let layer = 0; layer < 4; layer++) {
 			tracks[layer].pos = -1;
-			nextStepTime[layer] = t + 0.05;
+			nextStepTime[layer] = startAt;
 		}
-		timer = setInterval(tick, LOOKAHEAD_MS);
+		ensureTimer();
 	}
 
 	function stop() {
 		playing = false;
-		if (timer) clearInterval(timer);
-		timer = null;
+		stopTimerIfIdle();
 		for (let layer = 0; layer < 4; layer++) engine.layerOff(layer);
 	}
 
 	function setTempo(bpm) { tempoBpm = Math.max(20, Math.min(400, bpm)); }
+
+	function setMetronome(enabled) {
+		enabled = !!enabled;
+		if (metronomeOn === enabled) return;
+		metronomeOn = enabled;
+		const t = now();
+		if (enabled) {
+			if (!playing) beatOrigin = t + 0.05;
+			nextClickTime = playing ? nextBeatAfter(t) : beatOrigin;
+			ensureTimer();
+		} else {
+			stopTimerIfIdle();
+		}
+	}
 	function getTempo() { return tempoBpm; }
 
 	// nearest-step quantization for real-time KEYS recording (spec §7.4)
@@ -111,7 +170,8 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		tracks,
 		start, stop,
 		get playing() { return playing; },
-		setTempo, getTempo,
+		setTempo, getTempo, setMetronome,
+		get metronomeOn() { return metronomeOn; },
 		nearestStepIndex, stepDurSeconds,
 	};
 }
