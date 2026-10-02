@@ -45,6 +45,14 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	playBtn.addEventListener("click", () => actions.playToggle());
 	top.appendChild(playBtn);
 
+	const metronomeBtn = el("button", "az-btn az-metronome", "METRO");
+	metronomeBtn.title = "Arm or disarm metronome";
+	metronomeBtn.addEventListener("click", () => {
+		sequencer.setMetronome(!sequencer.metronomeOn);
+		refresh();
+	});
+	top.appendChild(metronomeBtn);
+
 	const tempoWrap = el("label", "az-field");
 	tempoWrap.appendChild(el("span", null, "tempo"));
 	const tempoInput = el("input");
@@ -503,6 +511,8 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		polyInput.value = state.maxVoices;
 		playBtn.textContent = state.playing ? "STOP" : "PLAY";
 		playBtn.classList.toggle("active", state.playing);
+		metronomeBtn.classList.toggle("active", sequencer.metronomeOn);
+		metronomeBtn.setAttribute("aria-pressed", String(sequencer.metronomeOn));
 		recArmBtn.classList.toggle("active", state.recArm);
 
 		rootSelect.value = state.keyRoot;
