@@ -105,6 +105,23 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 
 	const lpStatus = el("div", "az-lp-status", "Launchpad: not connected");
 	top.appendChild(lpStatus);
+	const lpReconnect = el("button", "az-btn az-lp-reconnect", "CONNECT MIDI");
+	lpReconnect.type = "button";
+	lpReconnect.addEventListener("click", async () => {
+		lpReconnect.disabled = true;
+		lpReconnect.textContent = "CONNECTING…";
+		lpStatus.textContent = "Launchpad: requesting MIDI access…";
+		try {
+			await launchpad.disconnect();
+			const found = await launchpad.connect();
+			lpStatus.textContent = found ? "Launchpad: connected" : "Launchpad not found — check USB connection";
+		} catch (err) {
+			lpStatus.textContent = "Launchpad: " + (err?.message || "MIDI access failed");
+		}
+		lpReconnect.disabled = false;
+		lpReconnect.textContent = launchpad.connected ? "RECONNECT" : "CONNECT MIDI";
+	});
+	top.appendChild(lpReconnect);
 
 	// ================= Patch panel =================
 	const patchBar = el("div", "az-patchbar");
@@ -439,11 +456,20 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 				actions.stopNoteMomentary(held.layer, held.pitch);
 				if (held.step != null) actions.recordStepLength(held.layer, held.step, (performance.now() - held.t0) / 1000);
 			}
+			actions.syncArp(layer);
 		}
 		refresh();
 		launchpad && launchpad.scheduleRefresh();
 	});
 	gridKeysWrap.appendChild(keyLatchBtn);
+	const arpToggle = mkBtn("ARP OFF", "az-key-arp", () => actions.setArp(state.layerSel, "enabled", !state.padArp[state.layerSel].enabled));
+	const arpWaySelect = selectEl(actions.arpWays, (v) => actions.setArp(state.layerSel, "way", v));
+	const arpOctaveSelect = selectEl(["1 octave", "2 octaves", "3 octaves", "4 octaves"], (v) => actions.setArp(state.layerSel, "octaves", v + 1));
+	const arpRateSelect = selectEl(["1/4", "1/8", "1/16", "1/32"], (v) => actions.setArp(state.layerSel, "rate", actions.arpRates[v]));
+	arpWaySelect.title = "Arpeggio order";
+	arpOctaveSelect.title = "Octave span";
+	arpRateSelect.title = "Tempo-synced note rate";
+	gridKeysWrap.append(arpToggle, el("span", null, "MODE"), arpWaySelect, el("span", null, "OCT"), arpOctaveSelect, el("span", null, "RATE"), arpRateSelect);
 	const screenGrid = el("div", "az-control-grid");
 	gridView.appendChild(screenGrid);
 	const screenPads = [];
@@ -482,6 +508,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 				state.padLatched.splice(state.padLatched.indexOf(alreadyLatched), 1);
 				actions.stopNoteMomentary(layer, pitch);
 				if (alreadyLatched.step != null) actions.recordStepLength(layer, alreadyLatched.step, (performance.now() - alreadyLatched.t0) / 1000);
+				actions.syncArp(layer);
 				refresh();
 				launchpad && launchpad.scheduleRefresh();
 				return;
@@ -493,7 +520,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 				if (step != null) actions.recordStepNote(layer, step, pitch);
 			}
 			const held = { layer, pitch, step, t0: performance.now(), latch: !!state.padLatchMode[layer] };
-			if (held.latch) state.padLatched.push(held);
+			if (held.latch) { state.padLatched.push(held); actions.syncArp(layer); }
 			screenHeld.set(idx, held);
 			refresh();
 			launchpad && launchpad.scheduleRefresh();
@@ -719,6 +746,15 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		keyLatchBtn.textContent = state.padLatchMode[layer] ? "LATCH ON" : "LATCH OFF";
 		keyLatchBtn.setAttribute("aria-pressed", String(!!state.padLatchMode[layer]));
 		keyLatchBtn.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2);
+		const arp = state.padArp[layer];
+		arpToggle.classList.toggle("active", !!arp.enabled);
+		arpToggle.textContent = arp.enabled ? "ARP ON" : "ARP OFF";
+		arpToggle.setAttribute("aria-pressed", String(!!arp.enabled));
+		arpToggle.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2);
+		arpWaySelect.value = arp.way;
+		arpOctaveSelect.value = arp.octaves - 1;
+		arpRateSelect.value = actions.arpRates.indexOf(arp.rate);
+		[arpWaySelect, arpOctaveSelect, arpRateSelect].forEach((control) => control.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2));
 		const padSpecs = activeEngineSpecs(layer, state.structure[layer]);
 		for (let i = 0; i < 64; i++) {
 			const pad = screenPads[i], col = i % 8, row = Math.floor(i / 8);
@@ -816,6 +852,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		masterBox.refresh();
 
 		lpStatus.textContent = "Launchpad: " + (launchpad && launchpad.connected ? "connected" : "not connected");
+		lpReconnect.textContent = launchpad && launchpad.connected ? "RECONNECT" : "CONNECT MIDI";
 	}
 
 	refresh();

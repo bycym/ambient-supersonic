@@ -10,11 +10,12 @@ import { PAD_C, activeEngineSpecs, SLOT_SPECS, REVSHIM_SPECS, SCALES, SCALE_NAME
 
 const CC_DEBOUNCE_GRACE_MS = 250;
 
-export function createLaunchpadController({ state, actions, sequencer, engine }) {
+export function createLaunchpadController({ state, actions, sequencer, engine, onConnectionChange }) {
 	const lp = new Launchpad({
 		onNote: (num, vel) => handleNote(num, vel),
 		onCC: (num, val) => handleCC(num, val),
-		onLost: () => { connected = false; },
+		onLost: () => { connected = false; stopBlink(); },
+		onConnectionChange: (value) => { connected = value; onConnectionChange?.(value); },
 	});
 
 	let connected = false;
@@ -91,6 +92,7 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 		if (i >= 0) state.padLatched.splice(i, 1);
 		actions.stopNoteMomentary(e.layer, e.pitch);
 		if (e.step != null) actions.recordStepLength(e.layer, e.step, (performance.now() - e.t0) / 1000);
+		actions.syncArp(e.layer);
 	}
 	function keyUp(idx) {
 		const h = state.padHeld.get(idx);
@@ -128,7 +130,7 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 			if (targetIdx != null) step = actions.recordStepNote(layer, targetIdx, pitch);
 		}
 		const entry = { pitch, vel: v, t0: performance.now(), step, layer };
-		if (latch) state.padLatched.push(entry);
+		if (latch) { state.padLatched.push(entry); actions.syncArp(layer); }
 		else state.padHeld.set(idx, entry);
 	}
 
@@ -427,6 +429,7 @@ export function createLaunchpadController({ state, actions, sequencer, engine })
 		stopBlink();
 		await lp.disconnect();
 		connected = false;
+		onConnectionChange?.(false);
 	}
 
 	return { connect, disconnect, scheduleRefresh, get connected() { return connected; } };

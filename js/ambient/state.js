@@ -34,6 +34,7 @@ export function createState() {
 		padPage: 0,
 		padShift: false,
 		padLatchMode: [false, false, false, false],
+		padArp: Array.from({ length: 4 }, () => ({ enabled: false, way: 0, octaves: 1, rate: 8 })),
 		padScaleEdit: false,
 		padHeld: new Map(), // gridIndex -> {layer,note}
 		padLatched: [], // {layer,note}

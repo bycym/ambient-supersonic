@@ -73,7 +73,7 @@ export async function mount(panel, gate, audioContext) {
 
 	const actions = createActions({ state, engine, sequencer, refresh: refreshAll });
 
-	launchpad = createLaunchpadController({ state, actions, sequencer, engine });
+	launchpad = createLaunchpadController({ state, actions, sequencer, engine, onConnectionChange: () => gui && gui.refresh() });
 
 	gui = buildGui({ panel, state, actions, engine, sequencer, launchpad });
 
