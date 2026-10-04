@@ -9,6 +9,69 @@ import { newStep } from "./sequencer.js";
 
 export function createActions({ state, engine, sequencer, refresh }) {
 	const R = () => refresh && refresh();
+	const arpTimers = Array(4).fill(null);
+	const arpVoices = Array(4).fill(null);
+	const arpCursors = Array(4).fill(0);
+	const arpWays = ["UP", "DOWN", "UP/DOWN", "PLAYED", "RANDOM"];
+	const arpRates = [4, 8, 16, 32];
+
+	function arpNotes(layer) {
+		const cfg = state.padArp[layer];
+		const held = state.padLatched.filter((note) => note.layer === layer);
+		if (cfg.way === 0) held.sort((a, b) => a.pitch - b.pitch);
+		if (cfg.way === 1) held.sort((a, b) => b.pitch - a.pitch);
+		const notes = [];
+		for (let octave = 0; octave < cfg.octaves; octave++) {
+			for (const note of held) notes.push({ pitch: note.pitch + octave * 12, vel: note.vel ?? 0.8 });
+		}
+		for (let i = notes.length - 1; i >= 0; i--) if (notes[i].pitch > 127) notes.splice(i, 1);
+		if (cfg.way === 2 && notes.length > 2) {
+			const upDown = notes.slice(0, -1).concat(notes.slice().reverse().slice(0, -1));
+			return upDown;
+		}
+		return notes;
+	}
+
+	function stopArp(layer) {
+		if (arpTimers[layer]) clearTimeout(arpTimers[layer]);
+		arpTimers[layer] = null;
+		if (arpVoices[layer] != null) engine.noteOff(layer, arpVoices[layer]);
+		arpVoices[layer] = null;
+	}
+
+	function syncArp(layer) {
+		const cfg = state.padArp[layer];
+		const wasArping = arpTimers[layer] != null || arpVoices[layer] != null;
+		stopArp(layer);
+		const notes = arpNotes(layer);
+		if (!cfg.enabled || notes.length < 2 || state.muted[layer]) {
+			if (wasArping && !state.muted[layer]) {
+				for (const note of state.padLatched.filter((item) => item.layer === layer)) playNoteMomentary(layer, note.pitch, note.vel);
+			}
+			return;
+		}
+		for (const note of state.padLatched.filter((item) => item.layer === layer)) engine.noteOff(layer, note.pitch);
+		const period = 60000 / Math.max(20, state.tempoBpm) * (4 / cfg.rate);
+		const tick = () => {
+			let index = arpCursors[layer]++;
+			if (cfg.way === 4) index = Math.floor(Math.random() * notes.length);
+			const note = notes[index % notes.length];
+			if (arpVoices[layer] != null) engine.noteOff(layer, arpVoices[layer]);
+			playNoteMomentary(layer, note.pitch, note.vel);
+			arpVoices[layer] = note.pitch;
+			arpTimers[layer] = setTimeout(tick, period);
+		};
+		arpCursors[layer] = 0;
+		tick();
+	}
+
+	function setArp(layer, key, value) {
+		const cfg = state.padArp[layer];
+		cfg[key] = value;
+		if (key === "enabled") arpCursors[layer] = 0;
+		syncArp(layer);
+		R();
+	}
 
 	function selectLayer(layer) {
 		state.layerSel = layer;
@@ -22,6 +85,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		for (const [k, v] of [...state.padHeld.entries()]) {
 			if (v.layer === layer) state.padHeld.delete(k);
 		}
+		syncArp(layer);
 	}
 
 	function toggleMute(layer) {
@@ -92,6 +156,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	function setTempo(bpm) {
 		state.tempoBpm = Math.max(20, Math.min(400, bpm));
 		sequencer.setTempo(state.tempoBpm);
+		for (let layer = 0; layer < 4; layer++) if (state.padArp[layer].enabled) syncArp(layer);
 		R();
 	}
 
@@ -260,9 +325,9 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		return state.padKeyBase + state.keyRoot + Math.floor(degree / scaleSize) * 12 + scale[degree % scaleSize];
 	}
 
-	function playNoteMomentary(layer, pitch) {
+	function playNoteMomentary(layer, pitch, velocity = 0.8) {
 		if (state.muted[layer]) return;
-		engine.noteOn(layer, pitch, 0.8, state.lp[layer], state.structure[layer], state.noiseSrc, null, state.muted[layer]);
+		engine.noteOn(layer, pitch, velocity, state.lp[layer], state.structure[layer], state.noiseSrc, null, state.muted[layer]);
 	}
 	function stopNoteMomentary(layer, pitch) {
 		engine.noteOff(layer, pitch);
@@ -315,6 +380,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		randomizeTrack, delStep, clrTrack, setLock, clrLock,
 		setSlotType, setSlotParam, toggleSlotActive,
 		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive,
+		setArp, arpWays, arpRates, syncArp,
 		playNoteMomentary, stopNoteMomentary, recordStepNote, recordStepLength,
 		keyDegreeToPitch,
 		loadSampleFile, loadGrainSampleFile,

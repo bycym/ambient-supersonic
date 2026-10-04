@@ -37,12 +37,14 @@ function sleep(ms) {
 }
 
 export class Launchpad {
-	constructor({ onNote, onCC, onLost } = {}) {
+	constructor({ onNote, onCC, onLost, onConnectionChange } = {}) {
 		this.input = null;
 		this.output = null;
 		this.onNote = onNote || (() => {});
 		this.onCC = onCC || (() => {});
 		this.onLost = onLost || (() => {});
+		this.onConnectionChange = onConnectionChange || (() => {});
+		this.access = null;
 		this.connected = false;
 		this.ledCache = new Map(); // index -> "r,g,b"
 		this.pendingLeds = new Map();
@@ -53,11 +55,13 @@ export class Launchpad {
 
 	async connect({ maxAttempts = 16, intervalMs = 250 } = {}) {
 		if (!navigator.requestMIDIAccess) {
-			console.warn("Web MIDI not available in this browser.");
-			return false;
+			throw new Error("Web MIDI unavailable. Use a Chromium browser over HTTPS or localhost.");
 		}
 		const access = await navigator.requestMIDIAccess({ sysex: true });
-		access.onstatechange = () => this._scan(access);
+		this.access = access;
+		access.onstatechange = () => this._scan(access).then((found) => {
+			if (!found && this.connected) this._markLost();
+		}).catch((err) => { console.warn("Launchpad rescan failed:", err); this._markLost(); });
 
 		for (let i = 0; i < maxAttempts; i++) {
 			if (await this._scan(access)) return true;
@@ -68,10 +72,10 @@ export class Launchpad {
 
 	async _scan(access) {
 		const inputs = [...access.inputs.values()].filter((p) =>
-			/launchpad/i.test(p.name || ""),
+			p.state !== "disconnected" && /launchpad/i.test(p.name || ""),
 		);
 		const outputs = [...access.outputs.values()].filter((p) =>
-			/launchpad/i.test(p.name || ""),
+			p.state !== "disconnected" && /launchpad/i.test(p.name || ""),
 		);
 		if (!inputs.length || !outputs.length) return false;
 
@@ -82,19 +86,33 @@ export class Launchpad {
 		// Prefer a matching pair sharing the same logical port name — LEDs and
 		// input presses must be on the SAME port or LEDs work but presses don't.
 		const matched = inputs.find((i) => outputs.some((o) => o.name === i.name));
-		this.input = matched
+		const nextInput = matched
 			? inputs.find((i) => i.name === matched.name)
 			: input;
-		this.output = matched
+		const nextOutput = matched
 			? outputs.find((o) => o.name === matched.name)
 			: output;
-
-		if (!this.input || !this.output) return false;
+		if (!nextInput || !nextOutput) return false;
+		if (this.connected && this.input === nextInput && this.output === nextOutput) return true;
+		this.input = nextInput;
+		this.output = nextOutput;
 
 		this.input.onmidimessage = (e) => this._handleMessage(e.data);
 		await this._enterProgrammerMode();
 		this.connected = true;
+		this.onConnectionChange(true);
 		return true;
+	}
+
+	_markLost() {
+		const wasConnected = this.connected;
+		this.connected = false;
+		this.input = null;
+		this.output = null;
+		this.ledCache.clear();
+		this.pendingLeds.clear();
+		if (wasConnected) this.onLost();
+		this.onConnectionChange(false);
 	}
 
 	async _sysex(bytes) {
@@ -103,9 +121,7 @@ export class Launchpad {
 			this.output.send([...SYSEX_HEADER, ...bytes, SYSEX_FOOTER]);
 		} catch (err) {
 			console.warn("Launchpad SysEx send failed:", err);
-			this.connected = false;
-			this.output = null;
-			this.onLost();
+			this._markLost();
 		}
 	}
 
@@ -120,13 +136,12 @@ export class Launchpad {
 	}
 
 	async disconnect() {
-		if (!this.connected) return;
-		await this._sysex([0x0e, 0x00]);
-		await sleep(HANDSHAKE_GAP_MS);
-		await this._sysex([0x2c, 0x00]); // back to factory note mode
-		this.connected = false;
-		this.input = null;
-		this.output = null;
+		if (this.connected) {
+			await this._sysex([0x0e, 0x00]);
+			await sleep(HANDSHAKE_GAP_MS);
+			await this._sysex([0x2c, 0x00]); // back to factory note mode
+		}
+		this._markLost();
 	}
 
 	_handleMessage(data) {
