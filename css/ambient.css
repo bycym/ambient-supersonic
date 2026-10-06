@@ -114,6 +114,9 @@
 .hidden { display: none !important; }
 
 .az-slider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+.az-glitch-modes { margin: 6px 0; }
+.az-glitch-mode { padding: 4px 8px; }
+.az-arp-row { margin-top: 5px; padding-top: 5px; border-top: 1px solid #28313a; }
 .az-slider-row { display: grid; grid-template-columns: 78px 1fr 64px; align-items: center; gap: 6px; padding: 1px 0; }
 .az-slider-label { color: var(--dim); font-size: 11px; }
 .az-slider-val { font-family: monospace; font-size: 11px; text-align: right; }

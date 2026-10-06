@@ -4,7 +4,16 @@
 
 export const LAYERS = ["DRONE", "PAD", "ATMOS", "NOISE"];
 export const STRUCTURES = ["DRONE 1", "DRONE 2", "PAD 1", "PAD 2", "ATMOS 1", "ATMOS 2", "VONGON REPLAY"];
-export const NOISE_STRUCTURES = ["NOISE TEXTURE", "CLOUDS", "GRAINTOPIA"];
+export const NOISE_STRUCTURES = ["NOISE TEXTURE", "CLOUDS", "GRAINTOPIA", "GLITCH PERC"];
+export const GLITCH_PERC_MODES = ["KICK", "SNARE", "METAL", "WOOD", "GLITCH"];
+export const GLITCH_PERC_SNAPSHOT_IDS = ["kMode", "kDecay", "kPitch", "kTone", "kSnap", "kBody", "kGrit", "kLevel", "kPan", "kSend"];
+export const GLITCH_PERC_BASE_DEFAULTS = [
+	{ mode: 0, decay: 0.18, pitch: -12, tone: 1800, snap: 0.2, body: 0.9, grit: 0.05, level: 0.7, pan: 0, revSend: 0 },
+	{ mode: 1, decay: 0.25, pitch: 0, tone: 7000, snap: 0.8, body: 0.55, grit: 0.15, level: 0.7, pan: 0, revSend: 0 },
+	{ mode: 2, decay: 0.8, pitch: 7, tone: 10000, snap: 0.5, body: 0.4, grit: 0.25, level: 0.7, pan: 0, revSend: 0 },
+	{ mode: 3, decay: 0.45, pitch: -3, tone: 2200, snap: 0.15, body: 0.9, grit: 0.1, level: 0.7, pan: 0, revSend: 0 },
+	{ mode: 4, decay: 0.18, pitch: 5, tone: 9000, snap: 0.7, body: 0.35, grit: 0.85, level: 0.7, pan: 0, revSend: 0 },
+];
 export const MOD_SHAPES = ["SINE", "SQAR", "TRI", "SAW", "R.SAW", "RAND", "S.RND", "LOG", "R.LOG", "PL.10"];
 export const FILTER_NAMES = ["LPF", "BPF", "HPF"];
 export const LFO_DESTS = ["PITCH", "CUTOFF", "HARMONIC", "LEVEL", "PAN", "MOD"];
@@ -113,15 +122,28 @@ export const GRAINTOPIA_SPECS = [
 	["gLevel", "level", "level", 0, 1, 0.7, "", false], ["gPan", "pan", "pan", -1, 1, 0, "", false],
 	["gSend", "revSend", "reverb send", 0, 1, 0.3, "", false],
 ];
+export const KEINSEIER_SPECS = [
+	["kMode", "mode", "mode", 0, 4, 0, "", false, true],
+	["kDecay", "decay", "decay", 0.02, 3, 0.24, "s", true],
+	["kPitch", "pitch", "pitch", -24, 24, 0, "st", false],
+	["kTone", "tone", "tone", 250, 12000, 8000, "Hz", true],
+	["kSnap", "snap", "snap", 0, 1, 0.35, "", false],
+	["kBody", "body", "body", 0, 1, 0.65, "", false],
+	["kGrit", "grit", "glitch", 0, 1, 0.2, "", false],
+	["kLevel", "level", "level", 0, 1, 0.7, "", false],
+	["kPan", "pan", "pan", -1, 1, 0, "", false],
+	["kSend", "revSend", "reverb send", 0, 1, 0, "", false],
+];
 export function activeEngineSpecs(layer, structure) {
 	if (layer === 3) {
 		if (structure === 8) return CLOUDS_SPECS;
 		if (structure === 9) return GRAINTOPIA_SPECS;
+		if (structure === 10) return KEINSEIER_SPECS;
 		return SPECS;
 	}
 	return structure === 6 ? VONGON_SPECS : SPECS;
 }
-export const SPEC_BY_ID = Object.fromEntries([...SPECS, ...VONGON_SPECS, ...CLOUDS_SPECS, ...GRAINTOPIA_SPECS].map((s) => [s[0], s]));
+export const SPEC_BY_ID = Object.fromEntries([...SPECS, ...VONGON_SPECS, ...CLOUDS_SPECS, ...GRAINTOPIA_SPECS, ...KEINSEIER_SPECS].map((s) => [s[0], s]));
 export function specRow(id) { return SPEC_BY_ID[id]; }
 
 // dropdown-backed per-layer extras (§1.6), stored alongside the 25 specs

@@ -203,6 +203,43 @@ var nTables = 64, tableSize = 512;
 		}).add;
 	};
 
+	// Original algorithmic percussion voice: tuned impacts, noisy transients,
+	// inharmonic resonances, and controllable sample-rate/bit reduction.
+	SynthDef(\az_keinseier, { |out = 0, revB = 0, hz = 110, vel = 0.8, gate = 1,
+		mode = 0, decay = 0.24, pitch = 0, tone = 8000, snap = 0.35, body = 0.65,
+		grit = 0.2, level = 0.7, pan = 0, revSend = 0|
+		var base, bodyEnv, snapEnv, pitchEnv, noise, kick, snare, metal, wood, glitch;
+		var raw, sig, crushRate, bits, crushed, toneHz;
+		base = (hz * (2 ** (pitch / 12))).clip(25, 12000);
+		// Percussive voices ignore note-off. Each hit owns its full envelope.
+		bodyEnv = EnvGen.kr(Env.perc(0.001, decay.clip(0.02, 3), curve: -5), doneAction: 2);
+		snapEnv = EnvGen.kr(Env.perc(0.001, (decay * 0.22).clip(0.008, 0.45), curve: -8));
+		pitchEnv = EnvGen.kr(Env.perc(0.001, 0.055, curve: -6));
+		toneHz = tone.clip(250, 12000);
+		noise = HPF.ar(WhiteNoise.ar(1), toneHz) * snapEnv;
+		kick = SinOsc.ar((base * (1 + (pitchEnv * (2 + (snap * 16))))).clip(25, 15000)) * bodyEnv;
+		snare = (SinOsc.ar((base * 1.47).clip(30, 12000)) * body) + (noise * (0.3 + snap));
+		snare = snare * bodyEnv;
+		metal = Mix([SinOsc.ar((base * 2.013).clip(30, 15000)),
+			SinOsc.ar((base * 2.771).clip(30, 15000)) * 0.7,
+			SinOsc.ar((base * 4.193).clip(30, 15000)) * 0.45]);
+		metal = (metal * body + (noise * snap)) * bodyEnv;
+		wood = Mix(Ringz.ar(Impulse.ar(0), [base, base * 2.37, base * 3.91], decay.clip(0.02, 3))) * bodyEnv;
+		glitch = (noise + (BPF.ar(WhiteNoise.ar(1), toneHz, 0.08) * Dust2.ar(grit.linexp(0, 1, 3, 100)))) * bodyEnv;
+		raw = Select.ar(mode.round.clip(0, 4), [kick, snare, metal, wood, glitch]);
+		raw = raw + (noise * snap * 0.35);
+		crushRate = grit.clip(0, 1).linexp(0, 1, 24000, 1500);
+		bits = grit.clip(0, 1).linlin(0, 1, 16, 4);
+		crushed = Latch.ar(raw, Impulse.ar(crushRate));
+		crushed = (crushed * (2 ** bits)).round * (2 ** bits.neg);
+		sig = XFade2.ar(raw, crushed, (grit.clip(0, 1) * 2) - 1);
+		sig = RLPF.ar(sig, toneHz, (0.25 + ((1 - grit) * 0.5)).clip(0.05, 0.9));
+		sig = LeakDC.ar(sig.softclip) * bodyEnv * vel.clip(0, 1) * level.clip(0, 1);
+		sig = Pan2.ar(sig, pan.clip(-1, 1));
+		Out.ar(out, sig);
+		Out.ar(revB, sig * revSend.clip(0, 1));
+	}).add;
+
 	// ---- REVERB as a slot-compatible effect: same in/out/active/mix
 	// interface as the chorus/flanger/delay slot effects below, so any of
 	// the 4 can be freely chosen for fx1/fx2/fx3. Self-contained 8-line FDN

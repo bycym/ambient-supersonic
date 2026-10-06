@@ -20,6 +20,7 @@ export function serializePatch(state) {
 		slotParams: state.slotParams.map((d) => Object.assign({}, d)),
 		revShimParams: Object.assign({}, state.revShimParams),
 		masterParams: Object.assign({}, state.masterParams),
+		glitchBases: state.glitchBases.map((base) => Object.assign({}, base)),
 		tempoBpm: state.tempoBpm,
 		maxVoices: state.maxVoices,
 		keyRoot: state.keyRoot,
@@ -91,6 +92,11 @@ export async function applyPatch(state, data, ctx) {
 	}
 	if (data.maxVoices) { state.maxVoices = data.maxVoices; engine.setMaxVoices(data.maxVoices); }
 	state.keyRoot = data.keyRoot != null ? data.keyRoot : state.keyRoot;
+	if (Array.isArray(data.glitchBases)) {
+		for (let i = 0; i < Math.min(state.glitchBases.length, data.glitchBases.length); i++) {
+			state.glitchBases[i] = Object.assign({}, state.glitchBases[i], data.glitchBases[i]);
+		}
+	}
 	state.keyScale = data.keyScale != null ? data.keyScale : state.keyScale;
 	const keyBase = data.padKeyBase != null ? data.padKeyBase : data.keyBase;
 	state.padKeyBase = keyBase != null ? keyBase : state.padKeyBase;
