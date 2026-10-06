@@ -32,6 +32,7 @@ export function createEngine(sonic) {
 
 	// voices[layer] : Map<midiNote, nodeId>   held[layer]: [midiNote,...] oldest-first
 	const voices = [new Map(), new Map(), new Map(), new Map()];
+	const oneShotVoices = [new Map(), new Map(), new Map(), new Map()];
 	const held = [[], [], [], []];
 	let maxVoices = 6;
 
@@ -93,8 +94,9 @@ export function createEngine(sonic) {
 	function onVoiceEnded(nodeId) {
 		for (let layer = 0; layer < 4; layer++) {
 			for (const [note, id] of voices[layer]) {
-				if (id === nodeId) {
-					voices[layer].delete(note);
+					if (id === nodeId) {
+						voices[layer].delete(note);
+						oneShotVoices[layer].delete(note);
 					const hi = held[layer].indexOf(note);
 					if (hi >= 0) held[layer].splice(hi, 1);
 				}
@@ -106,6 +108,7 @@ export function createEngine(sonic) {
 		if (layer <= 2) return structure === 6 ? "az_vogon" : "az_str" + structure;
 		if (structure === 8) return "az_clouds";
 		if (structure === 9) return "az_graintopia";
+		if (structure === 10) return "az_keinseier";
 		if (noiseSrc < 8) return "az_noise" + noiseSrc;
 		const chans = noiseSrc === 9 ? usrChans : 2;
 		return "az_noisebuf" + chans;
@@ -114,7 +117,7 @@ export function createEngine(sonic) {
 	async function loadEngineFor(layer, structure) {
 		const name = layer <= 2
 			? (structure === 6 ? "az_vogon" : null)
-			: structure === 8 ? "az_clouds" : structure === 9 ? "az_graintopia" : null;
+			: structure === 8 ? "az_clouds" : structure === 9 ? "az_graintopia" : structure === 10 ? "az_keinseier" : null;
 		if (!name || loadedEngineDefs.has(name)) return;
 		const url = new URL(`../../synthdefs/ambient/${name}.scsyndef`, import.meta.url).href;
 		await sonic.loadSynthDef(url);
@@ -137,8 +140,9 @@ export function createEngine(sonic) {
 		while (held[layer].length >= maxVoices) {
 			const oldest = held[layer].shift();
 			const id = voices[layer].get(oldest);
-			if (id != null) sonic.send("/n_set", id, "gate", 0);
+			if (id != null && !oneShotVoices[layer].get(oldest)) sonic.send("/n_set", id, "gate", 0);
 			voices[layer].delete(oldest);
+			oneShotVoices[layer].delete(oldest);
 		}
 		const args = ["out", bus.mix, "revB", bus.rev, "hz", hz, "vel", vel, "gate", 1];
 		const activeRows = activeEngineSpecs(layer, structure);
@@ -158,28 +162,33 @@ export function createEngine(sonic) {
 			args.push("bank", BANK_BUFNUM[layer]);
 		} else if (layer === 3 && structure < 8) {
 			args.push("buf", noiseSrc === 9 ? USR_BUFNUM : REC_BUFNUM);
-		} else if (layer === 3) {
+		} else if (layer === 3 && (structure === 8 || structure === 9)) {
 			args.push("buf", stateGrainSource === 1 ? GRAIN_USR_BUFNUM : GRAIN_REC_BUFNUM);
 			if (structure === 8) args.push("headBus", GRAIN_HEAD_BUS);
 		}
 		const id = sonic.nextNodeId();
 		sonic.send("/s_new", defFor(layer, structure, noiseSrc), id, 1, grp.layer[layer], ...args);
 		voices[layer].set(note, id);
+		oneShotVoices[layer].set(note, structure === 10);
 		held[layer].push(note);
 		return id;
 	}
 
 	function noteOff(layer, note) {
 		const id = voices[layer].get(note);
-		if (id != null) sonic.send("/n_set", id, "gate", 0);
+		if (id != null && !oneShotVoices[layer].get(note)) sonic.send("/n_set", id, "gate", 0);
 		voices[layer].delete(note);
+		oneShotVoices[layer].delete(note);
 		const hi = held[layer].indexOf(note);
 		if (hi >= 0) held[layer].splice(hi, 1);
 	}
 
 	function layerOff(layer) {
-		for (const [, id] of voices[layer]) sonic.send("/n_set", id, "gate", 0);
+		for (const [note, id] of voices[layer]) {
+			if (!oneShotVoices[layer].get(note)) sonic.send("/n_set", id, "gate", 0);
+		}
 		voices[layer].clear();
+		oneShotVoices[layer].clear();
 		held[layer].length = 0;
 	}
 

@@ -4,7 +4,7 @@
 
 import {
 	LAYERS, STRUCTURES, NOISE_STRUCTURES, MOD_SHAPES, FILTER_NAMES, LFO_DESTS, WAVE_NAMES, NOISE_SRC_NAMES,
-	NOTE_NAMES, SCALE_NAMES, ROOT_NAMES, SCALES, SEQ_DIV_NAMES, activeEngineSpecs, SLOT_TYPE_NAMES, SLOT_SPECS,
+	NOTE_NAMES, SCALE_NAMES, ROOT_NAMES, SCALES, SEQ_DIV_NAMES, activeEngineSpecs, GLITCH_PERC_MODES, SLOT_TYPE_NAMES, SLOT_SPECS,
 	REVSHIM_SPECS, MASTER_SPECS, warpValue, unwarpValue, midiFromNoteIndex, noteIndexFromMidi,
 } from "./data.js";
 import * as PatchMod from "./patch.js";
@@ -348,12 +348,34 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	const extraControlWraps = [filterWrap, modShapeWrap, l1destWrap, l2destWrap];
 
 	const sliderGrid = el("div", "az-slider-grid");
+	const glitchModeRow = el("div", "az-glitch-modes az-field-row");
+	glitchModeRow.appendChild(el("span", null, "hit"));
+	const glitchModeButtons = GLITCH_PERC_MODES.map((name, mode) => {
+		const button = mkBtn(name, "az-glitch-mode", () => {
+			actions.setGlitchMode(state.layerSel, mode);
+			actions.playNoteMomentary(state.layerSel, state.seqNote[state.layerSel] ?? 60);
+		});
+		glitchModeRow.appendChild(button);
+		return button;
+	});
+	const glitchRandomButton = mkBtn("RND", "az-glitch-random", () => actions.randomizeGlitchPerc(state.layerSel));
+	glitchModeRow.appendChild(glitchRandomButton);
+	const glitchBaseRow = el("div", "az-glitch-base az-field-row");
+	glitchBaseRow.appendChild(el("span", null, "base"));
+	const glitchBaseSelect = selectEl(GLITCH_PERC_MODES, (mode) => {
+		actions.setGlitchMode(state.layerSel, mode);
+		actions.playNoteMomentary(state.layerSel, state.seqNote[state.layerSel] ?? 60);
+	});
+	glitchBaseRow.appendChild(glitchBaseSelect);
+	glitchBaseRow.appendChild(mkBtn("SAVE BASE", null, () => actions.saveGlitchBase(state.layerSel, parseInt(glitchBaseSelect.value, 10))));
+	paramPanel.appendChild(glitchModeRow);
+	paramPanel.appendChild(glitchBaseRow);
 	paramPanel.appendChild(sliderGrid);
 	let sliderRows = [];
 	let sliderSpecKey = "";
 	function rebuildLayerSliders(specs) {
 		sliderGrid.innerHTML = "";
-		sliderRows = specs.map((row) => {
+		sliderRows = specs.filter((row) => row[0] !== "kMode").map((row) => {
 			const [id, key, name, lo, hi, def, unit, warp, integer] = row;
 			const rowEl = el("div", "az-slider-row");
 			rowEl.appendChild(el("span", "az-slider-label", name));
@@ -462,6 +484,8 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		launchpad && launchpad.scheduleRefresh();
 	});
 	gridKeysWrap.appendChild(keyLatchBtn);
+	const arpRow = el("div", "az-field-row az-arp-row");
+	gridView.appendChild(arpRow);
 	const arpToggle = mkBtn("ARP OFF", "az-key-arp", () => actions.setArp(state.layerSel, "enabled", !state.padArp[state.layerSel].enabled));
 	const arpWaySelect = selectEl(actions.arpWays, (v) => actions.setArp(state.layerSel, "way", v));
 	const arpOctaveSelect = selectEl(["1 octave", "2 octaves", "3 octaves", "4 octaves"], (v) => actions.setArp(state.layerSel, "octaves", v + 1));
@@ -469,7 +493,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	arpWaySelect.title = "Arpeggio order";
 	arpOctaveSelect.title = "Octave span";
 	arpRateSelect.title = "Tempo-synced note rate";
-	gridKeysWrap.append(arpToggle, el("span", null, "MODE"), arpWaySelect, el("span", null, "OCT"), arpOctaveSelect, el("span", null, "RATE"), arpRateSelect);
+	arpRow.append(arpToggle, el("span", null, "MODE"), arpWaySelect, el("span", null, "OCT"), arpOctaveSelect, el("span", null, "RATE"), arpRateSelect);
 	const screenGrid = el("div", "az-control-grid");
 	gridView.appendChild(screenGrid);
 	const screenPads = [];
@@ -692,10 +716,19 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		const layer = state.layerSel;
 		const isTonal = layer <= 2;
 		const isNoise = layer === 3 && state.structure[layer] === 7;
-		const isGrain = layer === 3 && state.structure[layer] >= 8;
+		const isGrain = layer === 3 && (state.structure[layer] === 8 || state.structure[layer] === 9);
 		const activeSpecs = activeEngineSpecs(layer, state.structure[layer]);
 		const specKey = layer + ":" + state.structure[layer];
 		if (sliderSpecKey !== specKey) { sliderSpecKey = specKey; rebuildLayerSliders(activeSpecs); }
+		const isGlitchPerc = layer === 3 && state.structure[layer] === 10;
+		glitchModeRow.classList.toggle("hidden", !isGlitchPerc);
+		glitchBaseRow.classList.toggle("hidden", !isGlitchPerc);
+		glitchModeButtons.forEach((button, i) => button.classList.toggle("active", isGlitchPerc && state.lp[layer].mode === i));
+		glitchBaseSelect.value = state.lp[layer].mode ?? 0;
+		const canEditLayer = state.recArm && track.selectedStep != null;
+		glitchModeButtons.forEach((button) => { button.disabled = !isGlitchPerc || !canEditLayer; });
+		glitchRandomButton.disabled = !isGlitchPerc || !canEditLayer;
+		glitchBaseSelect.disabled = !isGlitchPerc || !canEditLayer;
 		structLabel.textContent = LAYERS[layer] + " -- " + (isTonal ? STRUCTURES[state.structure[layer]] : NOISE_STRUCTURES[state.structure[layer] - 7]);
 		structSelectWrap.classList.toggle("hidden", !isTonal);
 		noiseStructWrap.classList.toggle("hidden", isTonal);
@@ -755,6 +788,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		arpOctaveSelect.value = arp.octaves - 1;
 		arpRateSelect.value = actions.arpRates.indexOf(arp.rate);
 		[arpWaySelect, arpOctaveSelect, arpRateSelect].forEach((control) => control.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2));
+		arpRow.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2);
 		const padSpecs = activeEngineSpecs(layer, state.structure[layer]);
 		for (let i = 0; i < 64; i++) {
 			const pad = screenPads[i], col = i % 8, row = Math.floor(i / 8);
@@ -797,10 +831,16 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		if (!activeSpecs.some((row) => row[0] === state.lockSpecId)) state.lockSpecId = activeSpecs[0][0];
 		lockParamSelect.value = activeSpecs.findIndex((row) => row[0] === state.lockSpecId);
 		for (const s of sliderRows) {
+			s.range.disabled = !state.recArm || track.selectedStep == null;
 			const locked = track.selectedStep != null && track.steps[track.selectedStep].locks[s.id] !== undefined;
 			const v = locked ? track.steps[track.selectedStep].locks[s.id] : lp[s.key];
 			s.range.value = unwarpValue(s.lo, s.hi, v, s.warp);
 			s.readout.textContent = fmtVal(v, s.unit) + (locked ? " •L" : "");
+		}
+		noteSelect.disabled = !state.recArm;
+		for (const control of extraControlWraps) {
+			const select = control.querySelector("select");
+			if (select) select.disabled = !state.recArm || track.selectedStep == null;
 		}
 
 		tempoInput.value = state.tempoBpm;

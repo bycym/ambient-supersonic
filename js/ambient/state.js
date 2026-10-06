@@ -1,4 +1,4 @@
-import { defaultLayerParams, slotDefaults } from "./data.js";
+import { defaultLayerParams, slotDefaults, GLITCH_PERC_BASE_DEFAULTS } from "./data.js";
 import { newTrack } from "./sequencer.js";
 
 export function createState() {
@@ -26,6 +26,7 @@ export function createState() {
 		recArm: false,
 		lockSpecId: "cutoff",
 		currentPatchName: "untitled",
+		glitchBases: GLITCH_PERC_BASE_DEFAULTS.map((base) => ({ ...base })),
 
 		// Launchpad-only transient UI state (spec §10.2)
 		padMode: 0, // 0=STEP 1=PARAM 2=KEYS
