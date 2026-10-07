@@ -6,6 +6,7 @@
 import { SuperSonic } from "../../vendor/supersonic/dist/supersonic.js";
 import { N_TABLES, SPEC_BY_ID, activeEngineSpecs, SLOT_DEFS, slotDefaults } from "./data.js";
 import { tablesForWave } from "./wavetables.js";
+import { recordedAudioToWav } from "./wav.js";
 
 const BANK_BUFNUM = [0, N_TABLES, N_TABLES * 2]; // 0-63, 64-127, 128-191
 const REC_BUFNUM = 192;
@@ -134,22 +135,8 @@ export function createEngine(sonic) {
 
 	function setMaxVoices(n) { maxVoices = n; }
 
-	function noteOn(layer, note, vel, lp, structure, noiseSrc, locks, muted) {
-		if (muted) return;
-		if (layer === 3 && structure < 8 && noiseSrc === 9 && !usrLoaded) return; // no sample loaded yet
-		if (layer === 3 && structure < 8 && noiseSrc === 8 && !lineInLoaded) {
-			// original always has a (silent) recBuf allocated; we do too, so this
-			// still "plays" — just silence until something is recorded.
-		}
+	function voiceArgs(layer, note, vel, lp, structure, noiseSrc, locks) {
 		const hz = 440 * Math.pow(2, (note - 69) / 12);
-		if (voices[layer].has(note)) noteOff(layer, note);
-		while (held[layer].length >= maxVoices) {
-			const oldest = held[layer].shift();
-			const id = voices[layer].get(oldest);
-			if (id != null && !oneShotVoices[layer].get(oldest)) sonic.send("/n_set", id, "gate", 0);
-			voices[layer].delete(oldest);
-			oneShotVoices[layer].delete(oldest);
-		}
 		const args = ["out", layerOutBus(layer), "revB", bus.rev, "hz", hz, "vel", vel, "gate", 1];
 		const activeRows = activeEngineSpecs(layer, structure);
 		for (const row of activeRows) {
@@ -172,11 +159,38 @@ export function createEngine(sonic) {
 			args.push("buf", stateGrainSource === 1 ? GRAIN_USR_BUFNUM : GRAIN_REC_BUFNUM);
 			if (structure === 8) args.push("headBus", GRAIN_HEAD_BUS);
 		}
+		return args;
+	}
+
+	function canPlay(layer, structure, noiseSrc, muted) {
+		return !muted && !(layer === 3 && structure < 8 && noiseSrc === 9 && !usrLoaded);
+	}
+
+	function noteOn(layer, note, vel, lp, structure, noiseSrc, locks, muted) {
+		if (!canPlay(layer, structure, noiseSrc, muted)) return;
+		if (voices[layer].has(note)) noteOff(layer, note);
+		while (held[layer].length >= maxVoices) {
+			const oldest = held[layer].shift();
+			const id = voices[layer].get(oldest);
+			if (id != null && !oneShotVoices[layer].get(oldest)) sonic.send("/n_set", id, "gate", 0);
+			voices[layer].delete(oldest);
+			oneShotVoices[layer].delete(oldest);
+		}
 		const id = sonic.nextNodeId();
-		sonic.send("/s_new", defFor(layer, structure, noiseSrc), id, 1, grp.layer[layer], ...args);
+		sonic.send("/s_new", defFor(layer, structure, noiseSrc), id, 1, grp.layer[layer],
+			...voiceArgs(layer, note, vel, lp, structure, noiseSrc, locks));
 		voices[layer].set(note, id);
 		oneShotVoices[layer].set(note, structure === 10);
 		held[layer].push(note);
+		return id;
+	}
+
+	function previewNote(layer, note, vel, lp, structure, noiseSrc, locks, muted) {
+		if (!canPlay(layer, structure, noiseSrc, muted)) return;
+		const id = sonic.nextNodeId();
+		sonic.send("/s_new", defFor(layer, structure, noiseSrc), id, 1, grp.layer[layer],
+			...voiceArgs(layer, note, vel, lp, structure, noiseSrc, locks));
+		if (structure !== 10) setTimeout(() => sonic.send("/n_set", id, "gate", 0), 250);
 		return id;
 	}
 
@@ -363,13 +377,20 @@ export function createEngine(sonic) {
 		const rec = new MediaRecorder(dest.stream);
 		const chunks = [];
 		rec.ondataavailable = (e) => chunks.push(e.data);
-		const donePromise = new Promise((resolve) => {
-			rec.onstop = () => {
+		const donePromise = new Promise((resolve, reject) => {
+			rec.onstop = async () => {
 				try { sonic.node.disconnect(dest); } catch (e) { /* ignore */ }
-				resolve(new Blob(chunks, { type: rec.mimeType }));
+				try {
+					resolve(await recordedAudioToWav(new Blob(chunks, { type: rec.mimeType }), sonic.audioContext));
+				} catch (error) { reject(error); }
 			};
+			rec.onerror = (event) => reject(event.error || new Error("Audio recording failed"));
 		});
-		rec.start();
+		try { rec.start(); }
+		catch (error) {
+			try { sonic.node.disconnect(dest); } catch (disconnectError) { /* ignore */ }
+			throw error;
+		}
 		return { rec, donePromise };
 	}
 
@@ -381,7 +402,7 @@ export function createEngine(sonic) {
 	return {
 		bus, grp,
 		init, initFixedSynths,
-		defFor, noteOn, noteOff, layerOff, setMaxVoices, setLayerFxBypass, layerOutBus, loadEngineFor,
+		defFor, noteOn, previewNote, noteOff, layerOff, setMaxVoices, setLayerFxBypass, layerOutBus, loadEngineFor,
 		loadWave,
 		setSlotType, setSlotParam,
 		setRevShimParam, setMasterParam, setVol,

@@ -77,25 +77,39 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	polyWrap.appendChild(polyInput);
 	top.appendChild(polyWrap);
 
-	const recBtn = el("button", "az-btn az-rec-master", "REC");
+	const recBtn = el("button", "az-btn az-rec-master", "REC WAV");
+	recBtn.title = "Record the master output as a WAV file";
 	let masterRec = null;
-	recBtn.addEventListener("click", () => {
+	recBtn.addEventListener("click", async () => {
 		if (masterRec) {
-			masterRec.rec.stop();
-			masterRec.donePromise.then((blob) => {
+			const recording = masterRec;
+			masterRec = null;
+			recBtn.disabled = true;
+			recBtn.textContent = "SAVING WAV…";
+			try {
+				recording.rec.stop();
+				const blob = await recording.donePromise;
 				const a = document.createElement("a");
 				a.href = URL.createObjectURL(blob);
-				a.download = "ambient_zero_" + Date.now() + ".webm";
+				a.download = "ambient_zero_" + Date.now() + ".wav";
 				a.click();
 				setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-			});
-			masterRec = null;
-			recBtn.classList.remove("active");
-			recBtn.textContent = "REC";
+			} catch (error) {
+				alert("Could not save WAV recording: " + error.message);
+			} finally {
+				recBtn.disabled = false;
+				recBtn.classList.remove("active");
+				recBtn.textContent = "REC WAV";
+			}
 		} else {
-			masterRec = engine.startMasterRecording();
-			recBtn.classList.add("active");
-			recBtn.textContent = "● REC";
+			try {
+				masterRec = engine.startMasterRecording();
+				if (!masterRec) throw new Error("Audio engine is not ready yet");
+				recBtn.classList.add("active");
+				recBtn.textContent = "● REC WAV";
+			} catch (error) {
+				alert("Could not start WAV recording: " + error.message);
+			}
 		}
 	});
 	top.appendChild(recBtn);
@@ -377,8 +391,14 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	});
 	glitchBaseRow.appendChild(glitchBaseSelect);
 	glitchBaseRow.appendChild(mkBtn("SAVE BASE", null, () => actions.saveGlitchBase(state.layerSel, parseInt(glitchBaseSelect.value, 10))));
+	const glitchStepRndRow = el("div", "az-glitch-step-rnd az-field-row");
+	const glitchStepRndButton = mkBtn("RND STEP SOUNDS", null, () => actions.randomizeGlitchStepSounds(state.layerSel));
+	const glitchAllRndButton = mkBtn("RND ALL SOUNDS", null, () => actions.randomizeGlitchStepSounds(state.layerSel, true));
+	const glitchStepRndHint = el("span", "az-glitch-step-rnd-hint");
+	glitchStepRndRow.append(glitchStepRndButton, glitchAllRndButton, glitchStepRndHint);
 	paramPanel.appendChild(glitchModeRow);
 	paramPanel.appendChild(glitchBaseRow);
+	paramPanel.appendChild(glitchStepRndRow);
 	paramPanel.appendChild(sliderGrid);
 	let sliderRows = [];
 	let sliderSpecKey = "";
@@ -414,6 +434,9 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		refresh();
 	}));
 	viewButtons.forEach((button) => viewToolbar.appendChild(button));
+	const recArmBtn = mkBtn("REC ARM", "az-recarm", () => actions.toggleRecArm());
+	recArmBtn.title = "Arm step editing and note capture";
+	viewToolbar.appendChild(recArmBtn);
 
 	const keysRow = el("div", "az-field-row");
 	seqPanel.appendChild(keysRow);
@@ -438,8 +461,6 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	lenInput.type = "number"; lenInput.min = 1; lenInput.max = 64; lenInput.step = 1;
 	lenInput.addEventListener("input", () => actions.setTrackLength(state.layerSel, parseInt(lenInput.value, 10) || 16));
 	noteRow.appendChild(lenInput);
-	const recArmBtn = mkBtn("REC", "az-recarm", () => actions.toggleRecArm());
-	noteRow.appendChild(recArmBtn);
 	noteRow.appendChild(el("span", null, "div"));
 	const divSelect = selectEl(SEQ_DIV_NAMES, (v) => actions.setTrackDiv(state.layerSel, v));
 	noteRow.appendChild(divSelect);
@@ -792,11 +813,17 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		const isGlitchPerc = layer === 3 && state.structure[layer] === 10;
 		glitchModeRow.classList.toggle("hidden", !isGlitchPerc);
 		glitchBaseRow.classList.toggle("hidden", !isGlitchPerc);
+		glitchStepRndRow.classList.toggle("hidden", !isGlitchPerc);
 		glitchModeButtons.forEach((button, i) => button.classList.toggle("active", isGlitchPerc && state.lp[layer].mode === i));
 		glitchBaseSelect.value = state.lp[layer].mode ?? 0;
 		glitchModeButtons.forEach((button) => { button.disabled = !isGlitchPerc; });
 		glitchRandomButton.disabled = !isGlitchPerc;
 		glitchBaseSelect.disabled = !isGlitchPerc;
+		const selectedGlitchStep = track.selectedStep != null && track.steps[track.selectedStep]?.on ? track.selectedStep : null;
+		const activeGlitchSteps = isGlitchPerc && track.steps.slice(0, track.length).some((step) => step.on);
+		glitchStepRndButton.disabled = !activeGlitchSteps;
+		glitchAllRndButton.disabled = !activeGlitchSteps;
+		glitchStepRndHint.textContent = selectedGlitchStep != null ? `Selected step ${selectedGlitchStep + 1}` : "No selection: all active steps";
 		structLabel.textContent = LAYERS[layer] + " -- " + (isTonal ? STRUCTURES[state.structure[layer]] : NOISE_STRUCTURES[state.structure[layer] - 7]);
 		layerFxRouteBtn.textContent = state.layerFxBypass[layer] ? "BYPASS FX1-3" : "THROUGH FX1-3";
 		layerFxRouteBtn.classList.toggle("active", state.layerFxBypass[layer]);

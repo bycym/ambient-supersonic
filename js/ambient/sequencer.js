@@ -44,6 +44,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	// GUI and the scheduler agree on what's actually programmed.
 	if (!tracks) throw new Error("createSequencer requires `tracks` (pass state.seq)");
 	const nextStepTime = [0, 0, 0, 0];
+	const nextStepIndex = [0, 0, 0, 0];
 
 	function now() { return audioContext ? audioContext.currentTime : performance.now() / 1000; }
 
@@ -104,7 +105,9 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 
 	function scheduleStep(layer, track, when) {
 		const delayMs = Math.max(0, (when - now()) * 1000);
-		const idx = (track.pos + 1) % Math.max(1, track.length);
+		const length = Math.max(1, track.length);
+		const idx = nextStepIndex[layer] % length;
+		nextStepIndex[layer] = (idx + 1) % length;
 		const scheduledRun = runId;
 		setTimeout(() => { if (scheduledRun === runId) fireStep(layer, track, idx, when); }, delayMs);
 	}
@@ -150,6 +153,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		for (let layer = 0; layer < 4; layer++) {
 			tracks[layer].pos = -1;
 			nextStepTime[layer] = startAt;
+			nextStepIndex[layer] = 0;
 		}
 		ensureTimer();
 	}
