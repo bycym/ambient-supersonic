@@ -5,7 +5,7 @@
 // and hand back debounced note/CC events.
 //
 // Ported 1:1 from ~az.setupMIDI / ~az.padSysex / ~az.padCache in
-// ambient_zero_sc.scd (see spec_ambient_zero.md §10.6) — granular_zero_sc.scd
+// ambient_engine.scd (see spec_ambient_zero.md §10.6) — granular_zero_sc.scd
 // uses the identical protocol.
 
 const SYSEX_HEADER = [0xf0, 0x00, 0x20, 0x29, 0x02, 0x10];

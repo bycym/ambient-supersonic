@@ -1,6 +1,6 @@
 // ambient_zero_sc web port — top-level module. See
 // supercollider_standalone/webport/spec_ambient_zero.md for the full spec
-// this implements, and ambient_zero_sc.scd (line numbers cross-referenced in
+// this implements, and ambient_engine.scd (line numbers cross-referenced in
 // the spec) for ground truth on anything ambiguous.
 //
 // Architecture (spec §10.7's "single set of state-mutating functions" rule):

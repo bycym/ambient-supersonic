@@ -1,7 +1,7 @@
 // Brain Ø-specific Launchpad Pro button/LED semantics (spec §10), driving
 // the generic Launchpad driver in ../shared/launchpad.js. Ported 1:1 from
 // ~az.padPress / ~az.padCCIn / ~az.padKeyDown / ~az.padRedraw
-// (ambient_zero_sc.scd lines 2533-2900+2923-3089+563-2738) — every button here
+// (ambient_engine.scd lines 2533-2900+2923-3089+563-2738) — every button here
 // calls the exact same `actions` functions the on-screen GUI calls (spec
 // §10.7 "GUI/Launchpad synchronization principle").
 
