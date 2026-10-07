@@ -10,6 +10,7 @@ export function createState() {
 		grainSrc: 0, // 0 = recorded/mic buffer, 1 = user WAV buffer
 		usrChans: 0, // 0 = no WAV FILE sample loaded yet
 		muted: [false, false, false, false],
+		layerFxBypass: [false, false, false, false],
 		maxVoices: 6,
 		tempoBpm: 120,
 		vol: 0.5,

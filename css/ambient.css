@@ -74,6 +74,9 @@
 	border-radius: 6px;
 }
 .az-rnd-heading { grid-column: 1 / -1; color: var(--accent); font-size: 12px; }
+.az-rnd-active { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--fg); font-size: 11px; }
+.az-rnd-active input[type="range"] { flex: 1 1 130px; min-width: 100px; }
+.az-rnd-active input[type="number"] { box-sizing: border-box; width: 64px; }
 .az-rnd-field { display: flex; flex-direction: column; gap: 4px; color: var(--fg); font-size: 11px; }
 .az-rnd-field input { box-sizing: border-box; width: 100%; }
 
@@ -121,6 +124,7 @@
 .az-panel-title { font-weight: 700; color: var(--accent); margin-bottom: 6px; letter-spacing: 0.04em; }
 
 .az-struct-label { font-weight: 600; margin-bottom: 6px; }
+.az-layer-fx-route { color: var(--accent); font-size: 11px; margin-bottom: 8px; }
 .az-dropdown-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .az-dropdown-row .az-field-inline { background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; }
 .hidden { display: none !important; }
@@ -170,6 +174,8 @@
 .az-step.disabled { opacity: 0.25; cursor: default; }
 
 .az-chord { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
+.az-retrigger { align-items: center; }
+.az-retrigger input { box-sizing: border-box; width: 64px; }
 .az-lock { margin-top: 6px; }
 .az-lock-status { color: var(--dim); font-size: 11px; margin-top: 4px; }
 .az-recarm.active, .az-clrtrack { background: var(--danger); border-color: var(--danger); color: #240508; }
