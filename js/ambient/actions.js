@@ -5,7 +5,7 @@
 // apply no matter which input path triggered them.
 
 import { SPEC_BY_ID, activeEngineSpecs, slotDefaults, SCALES, GLITCH_PERC_SNAPSHOT_IDS } from "./data.js";
-import { newStep } from "./sequencer.js";
+import { newStep, newRndSettings } from "./sequencer.js";
 
 export function createActions({ state, engine, sequencer, refresh }) {
 	const R = () => refresh && refresh();
@@ -302,19 +302,32 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	function randomizeTrack(layer) {
 		if (!state.recArm) return;
 		const track = state.seq[layer];
+		const rnd = track.rnd || newRndSettings();
+		const randomPercent = (min, max) => {
+			const lo = Math.max(0, Math.min(100, Math.min(min, max)));
+			const hi = Math.max(0, Math.min(100, Math.max(min, max)));
+			return (lo + Math.floor(Math.random() * (hi - lo + 1))) / 100;
+		};
 		const base = selectedNoteFor(layer);
 		const jumps = [0, 3, 5, 7, 10];
 		for (let i = 0; i < track.length; i++) {
-			if (Math.random() < 0.3) {
+			if (Math.random() < rnd.density / 100) {
 				track.steps[i] = Object.assign(newStep(), {
 					on: true,
 					notes: [base + 12 + jumps[(Math.random() * jumps.length) | 0]],
+					vel: randomPercent(rnd.velMin, rnd.velMax),
+					chance: randomPercent(rnd.chanceMin, rnd.chanceMax),
 				});
 			} else {
 				track.steps[i].on = false;
 			}
 		}
 		track.selectedStep = null;
+		R();
+	}
+	function setRndSetting(layer, key, value) {
+		if (!["density", "velMin", "velMax", "chanceMin", "chanceMax"].includes(key) || !Number.isFinite(value)) return;
+		state.seq[layer].rnd[key] = Math.max(0, Math.min(100, Math.round(value)));
 		R();
 	}
 
@@ -326,7 +339,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	}
 
 	function clrTrack(layer) {
-		state.seq[layer] = Object.assign({ steps: Array.from({ length: 64 }, newStep), length: state.seq[layer].length, div: state.seq[layer].div, pos: -1, stepTime: 0, mute: false, selectedStep: null });
+		state.seq[layer] = Object.assign({ steps: Array.from({ length: 64 }, newStep), length: state.seq[layer].length, div: state.seq[layer].div, pos: -1, stepTime: 0, mute: false, selectedStep: null, rnd: state.seq[layer].rnd });
 		R();
 	}
 
@@ -456,7 +469,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		setLayerParam, setLayerExtra, setMaxVoices, setTempo, setVol, playToggle,
 		loadGlitchBase, setGlitchMode, saveGlitchBase,
 		clickStep, setSelectedStepNote, setTrackLength, setTrackDiv, toggleRecArm,
-		randomizeTrack, randomizeGlitchPerc, delStep, clrTrack, setLock, clrLock,
+		randomizeTrack, setRndSetting, randomizeGlitchPerc, delStep, clrTrack, setLock, clrLock,
 		setSlotType, setSlotParam, toggleSlotActive,
 		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive,
 		setArp, arpWays, arpRates, syncArp,

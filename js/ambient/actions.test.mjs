@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createState } from "./state.js";
 import { createActions } from "./actions.js";
+import { serializePatch } from "./patch.js";
 
 function makeHarness() {
 	const state = createState();
@@ -70,4 +71,33 @@ test("Glitch base save requires edit context and snapshots current state", () =>
 	actions.saveGlitchBase(3, 0);
 	assert.equal(state.glitchBases[0].decay, 1.25);
 	assert.equal(state.seq[3].steps[0].locks.kDecay, 1.25);
+});
+
+test("native step chance survives Webport patch export", () => {
+	const state = createState();
+	state.seq[0].steps[0].chance = 0.35;
+	state.seq[0].rnd.density = 65;
+	state.seq[0].rnd.velMin = 25;
+	const patch = JSON.parse(JSON.stringify(serializePatch(state)));
+	assert.equal(patch.seq[0].steps[0].chance, 0.35);
+	assert.equal(patch.seq[0].steps[1].chance, 1);
+	assert.equal(patch.seq[0].rnd.density, 65);
+	assert.equal(patch.seq[0].rnd.velMin, 25);
+});
+
+test("Webport RND applies per-track density, velocity, and chance ranges", () => {
+	const { state, actions } = makeHarness();
+	state.recArm = true;
+	for (const [key, value] of Object.entries({ density: 100, velMin: 35, velMax: 35, chanceMin: 40, chanceMax: 40 })) {
+		actions.setRndSetting(0, key, value);
+	}
+	actions.randomizeTrack(0);
+	assert.ok(state.seq[0].steps.slice(0, 16).every((step) => step.on && step.vel === 0.35 && step.chance === 0.4));
+	actions.setRndSetting(0, "density", 0);
+	actions.randomizeTrack(0);
+	assert.ok(state.seq[0].steps.slice(0, 16).every((step) => !step.on));
+	actions.setRndSetting(0, "velMin", -20);
+	assert.equal(state.seq[0].rnd.velMin, 0);
+	actions.setRndSetting(0, "chanceMax", 130);
+	assert.equal(state.seq[0].rnd.chanceMax, 100);
 });

@@ -5,6 +5,7 @@
 
 import { listPatches, savePatch, loadPatch, deletePatch, exportAzpatchBlob, importAzpatchFile, buildShareUrl, readPatchFromUrl, renderShareQr } from "../shared/patch-share.js";
 import { SLOT_SPECS, activeEngineSpecs, defaultLayerParams } from "./data.js";
+import { newRndSettings } from "./sequencer.js";
 
 const NS = "ambient";
 
@@ -27,9 +28,10 @@ export function serializePatch(state) {
 		keyScale: state.keyScale,
 		padKeyBase: state.padKeyBase,
 		seq: state.seq.map((t) => ({
-			steps: t.steps.map((s) => ({ on: s.on, notes: s.notes.slice(), vel: s.vel, len: s.len, locks: Object.assign({}, s.locks) })),
+			steps: t.steps.map((s) => ({ on: s.on, notes: s.notes.slice(), vel: s.vel, chance: s.chance ?? 1, len: s.len, locks: Object.assign({}, s.locks) })),
 			length: t.length,
 			div: t.div,
+			rnd: Object.assign(newRndSettings(), t.rnd),
 		})),
 	};
 }
@@ -107,11 +109,13 @@ export async function applyPatch(state, data, ctx) {
 				on: !!s.on,
 				notes: (s.notes || (s.note != null ? [s.note] : [60])).slice(),
 				vel: s.vel != null ? s.vel : 0.8,
+				chance: Math.max(0, Math.min(1, s.chance ?? 1)),
 				len: s.len != null ? s.len : 0.9,
 				locks: Object.assign({}, s.locks || {}),
 			})),
 			length: t.length || 16,
 			div: t.div != null ? t.div : 7,
+			rnd: Object.assign(newRndSettings(), t.rnd || {}),
 			pos: -1, stepTime: 0, mute: false,
 		}));
 		while (state.seq.length < 4) state.seq.push({ steps: [], length: 16, div: 7, pos: -1, stepTime: 0, mute: false });
@@ -119,9 +123,10 @@ export async function applyPatch(state, data, ctx) {
 			const incoming = importedTracks[i] || { steps: [], length: 16, div: 7 };
 			const target = state.seq[i];
 			target.steps = incoming.steps.slice(0, 64);
-			while (target.steps.length < 64) target.steps.push({ on: false, notes: [60], vel: 0.8, len: 0.9, locks: {} });
+			while (target.steps.length < 64) target.steps.push({ on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, locks: {} });
 			target.length = incoming.length;
 			target.div = incoming.div;
+			target.rnd = incoming.rnd || newRndSettings();
 			target.pos = -1;
 			target.stepTime = 0;
 			target.mute = false;

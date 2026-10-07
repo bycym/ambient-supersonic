@@ -442,6 +442,22 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	seqBtnRow.appendChild(mkBtn("CLR TRACK", "az-danger az-clrtrack", () => {
 		if (confirm("Clear the entire track?")) actions.clrTrack(state.layerSel);
 	}));
+	const rndPanel = el("div", "az-rnd-settings");
+	seqPanel.appendChild(rndPanel);
+	rndPanel.appendChild(el("strong", "az-rnd-heading", "RND SETTINGS · %"));
+	const rndInputs = [
+		["density", "Density"], ["velMin", "Vel min"], ["velMax", "Vel max"],
+		["chanceMin", "Chance min"], ["chanceMax", "Chance max"],
+	].map(([key, label]) => {
+		const wrap = el("label", "az-rnd-field");
+		wrap.appendChild(el("span", null, label));
+		const input = el("input");
+		input.type = "number"; input.min = 0; input.max = 100; input.step = 1;
+		input.addEventListener("change", () => actions.setRndSetting(state.layerSel, key, Number(input.value)));
+		wrap.appendChild(input);
+		rndPanel.appendChild(wrap);
+		return [key, input];
+	});
 
 	const grid = el("div", "az-grid");
 	seqPanel.appendChild(grid);
@@ -603,7 +619,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	lockBtnRow.appendChild(mkBtn("CLR LOCK", null, () => actions.clrLock(state.layerSel, state.lockSpecId)));
 	const lockStatus = el("div", "az-lock-status", "(select a step)");
 	lockPanel.appendChild(lockStatus);
-	const sequencerOnly = [keysRow, noteRow, seqBtnRow, grid, chordReadout, lockPanel];
+	const sequencerOnly = [keysRow, noteRow, seqBtnRow, rndPanel, grid, chordReadout, lockPanel];
 
 	// ================= FX chain =================
 	const fxChain = el("div", "az-panel az-fxchain");
@@ -858,6 +874,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		noteSelect.value = noteIndexFromMidi(state.seqNote[layer] ?? 60);
 		lenInput.value = track.length;
 		divSelect.value = track.div;
+		for (const [key, input] of rndInputs) input.value = track.rnd[key];
 
 		for (let i = 0; i < 64; i++) {
 			const st = track.steps[i];
