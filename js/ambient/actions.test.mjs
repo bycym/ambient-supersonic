@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createState } from "./state.js";
 import { createActions } from "./actions.js";
-import { serializePatch } from "./patch.js";
+import { serializePatch, applyPatch } from "./patch.js";
 
 function makeHarness() {
 	const state = createState();
@@ -12,6 +12,7 @@ function makeHarness() {
 		setVol() {},
 		setGrainSource() {},
 		noteOn() {},
+		previewNote() {},
 		noteOff() {},
 		setSlotParam() {},
 		setRevShimParam() {},
@@ -19,7 +20,7 @@ function makeHarness() {
 		setLayerFxBypass() {},
 	};
 	const sequencer = { setTempo() {}, stepDurSeconds() { return 1; } };
-	return { state, actions: createActions({ state, engine, sequencer, refresh() {} }) };
+	return { state, engine, actions: createActions({ state, engine, sequencer, refresh() {} }) };
 }
 
 test("layer parameter writes require REC and selected step", () => {
@@ -98,6 +99,50 @@ test("Glitch RND works without REC ARM and leaves steps unchanged", () => {
 	assert.ok(state.seq[3].steps.every((step) => Object.keys(step.locks).length === 0));
 });
 
+test("Glitch step sound RND saves distinct active-step sounds and rerolls one selection", () => {
+	const { state, engine, actions } = makeHarness();
+	state.structure[3] = 10;
+	actions.loadGlitchBase(3, 0);
+	const previews = [];
+	engine.noteOn = (layer, note, velocity, lp, structure, noiseSrc, locks) => previews.push({ layer, locks });
+	const track = state.seq[3];
+	track.length = 2;
+	track.steps[0].on = true;
+	track.steps[1].on = true;
+	const originalRandom = Math.random;
+	let draw = 0;
+	try {
+		Math.random = () => (draw++ % 10) / 10;
+		actions.randomizeGlitchStepSounds(3);
+		const firstSound = { ...track.steps[0].locks };
+		const secondSound = { ...track.steps[1].locks };
+		assert.notDeepEqual(firstSound, secondSound);
+		assert.equal(previews[0].layer, 3);
+		assert.deepEqual(previews[0].locks, firstSound);
+		for (const locks of [firstSound, secondSound]) {
+			for (const id of ["kMode", "kDecay", "kPitch", "kTone", "kSnap", "kBody", "kGrit", "kLevel", "kPan", "kSend"]) {
+				assert.notEqual(locks[id], undefined, id);
+			}
+		}
+		assert.deepEqual(serializePatch(state).seq[3].steps[0].locks, firstSound);
+		track.selectedStep = 0;
+		actions.randomizeGlitchStepSounds(3);
+		assert.notDeepEqual(track.steps[0].locks, firstSound);
+		assert.deepEqual(track.steps[1].locks, secondSound);
+		actions.randomizeGlitchStepSounds(3, true);
+		assert.notDeepEqual(track.steps[1].locks, secondSound);
+		assert.equal(state.lp[3].pitch, track.steps[0].locks.kPitch);
+		const rerolledSecondSound = { ...track.steps[1].locks };
+		track.selectedStep = null;
+		actions.setRndSetting(3, "activeSteps", 2);
+		actions.randomizeTrack(3);
+		assert.deepEqual(track.steps[1].locks, rerolledSecondSound);
+		assert.ok(track.steps[0].locks.kDecay > 0);
+	} finally {
+		Math.random = originalRandom;
+	}
+});
+
 test("Glitch base save requires edit context and snapshots current state", () => {
 	const { state, actions } = makeHarness();
 	state.structure[3] = 10;
@@ -128,6 +173,25 @@ test("native step chance survives Webport patch export", () => {
 	assert.equal(patch.seq[0].rnd.velMin, 25);
 });
 
+test("Webport patch load restores retrigger and step sound, with zero for old patches", async () => {
+	const source = createState();
+	source.seq[3].steps[0].on = true;
+	source.seq[3].steps[0].retrigger = 4;
+	source.seq[3].steps[0].locks = { kMode: 1, kPitch: 7 };
+	const patch = { seq: serializePatch(source).seq };
+	const target = createState();
+	const ctx = {
+		engine: { setLayerFxBypass() {}, async loadEngineFor() {}, async loadWave() {} },
+		refreshAll() {},
+	};
+	await applyPatch(target, patch, ctx);
+	assert.equal(target.seq[3].steps[0].retrigger, 4);
+	assert.deepEqual(target.seq[3].steps[0].locks, { kMode: 1, kPitch: 7 });
+	delete patch.seq[3].steps[0].retrigger;
+	await applyPatch(target, patch, ctx);
+	assert.equal(target.seq[3].steps[0].retrigger, 0);
+});
+
 test("selected step retrigger needs REC ARM and can be set or randomized", () => {
 	const { state, actions } = makeHarness();
 	const step = state.seq[0].steps[0];
@@ -156,6 +220,24 @@ test("selected step retrigger needs REC ARM and can be set or randomized", () =>
 	step.on = false;
 	actions.setStepRetrigger(0, 2);
 	assert.equal(step.retrigger, 5);
+});
+
+test("selecting a step previews its chord and saved sound without REC ARM", () => {
+	const { state, engine, actions } = makeHarness();
+	const played = [];
+	engine.previewNote = (...args) => played.push(args);
+	const step = state.seq[0].steps[0];
+	step.on = true;
+	step.notes = [60, 64];
+	step.vel = 0.42;
+	step.locks = { cutoff: 1200 };
+	actions.clickStep(0, 0);
+	assert.equal(state.seq[0].selectedStep, 0);
+	assert.deepEqual(played.map((args) => args[1]), [60, 64]);
+	assert.ok(played.every((args) => args[2] === 0.42 && args[6] === step.locks));
+	actions.clickStep(0, 1);
+	assert.equal(state.seq[0].selectedStep, 1);
+	assert.equal(played.length, 2);
 });
 
 test("Webport RND applies per-track density, velocity, and chance ranges", () => {

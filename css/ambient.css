@@ -40,6 +40,7 @@
 	letter-spacing: 0.02em;
 }
 .az-btn:hover { border-color: var(--accent); }
+.az-btn:disabled { opacity: 0.5; cursor: default; }
 .az-btn.active { background: var(--accent); color: #06121c; border-color: var(--accent); }
 .az-btn.az-danger { color: var(--danger); }
 .az-btn.az-danger:hover { border-color: var(--danger); }
@@ -82,6 +83,7 @@
 
 .az-play.active { background: var(--accent2); border-color: var(--accent2); color: #06121c; }
 .az-rec-master.active { background: var(--danger); border-color: var(--danger); color: #240508; }
+.az-recarm { margin-left: auto; }
 
 .az-meter { font-family: monospace; color: var(--dim); min-width: 110px; }
 .az-lp-status { font-size: 11px; color: var(--dim); margin-left: auto; }
@@ -132,6 +134,8 @@
 .az-slider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
 .az-glitch-modes { margin: 6px 0; }
 .az-glitch-mode { padding: 4px 8px; }
+.az-glitch-step-rnd { margin: 8px 0; }
+.az-glitch-step-rnd-hint { color: var(--dim); font-size: 11px; }
 .az-arp-row { margin-top: 5px; padding-top: 5px; border-top: 1px solid #28313a; }
 .az-slider-row { display: grid; grid-template-columns: 78px 1fr 64px; align-items: center; gap: 6px; padding: 1px 0; }
 .az-slider-label { color: var(--dim); font-size: 11px; }

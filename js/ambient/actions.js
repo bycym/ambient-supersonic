@@ -203,9 +203,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		R();
 	}
 
-	function randomizeGlitchPerc(layer) {
-		const track = state.seq[layer];
-		if (state.structure[layer] !== 10) return;
+	function randomizeGlitchValues(layer) {
 		const random = (lo, hi) => lo + Math.random() * (hi - lo);
 		const expRandom = (lo, hi) => Math.exp(Math.log(lo) + Math.random() * (Math.log(hi) - Math.log(lo)));
 		state.lp[layer].decay = expRandom(0.02, 3);
@@ -214,8 +212,34 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		state.lp[layer].snap = random(0, 1);
 		state.lp[layer].body = random(0, 1);
 		state.lp[layer].grit = random(0, 1);
+	}
+
+	function randomizeGlitchPerc(layer) {
+		const track = state.seq[layer];
+		if (state.structure[layer] !== 10) return;
+		randomizeGlitchValues(layer);
 		if (state.recArm && track.selectedStep != null) snapshotGlitchStep(layer, track.steps[track.selectedStep]);
 		R();
+	}
+
+	function randomizeGlitchStepSounds(layer, all = false) {
+		if (layer !== 3 || state.structure[layer] !== 10) return;
+		const track = state.seq[layer];
+		const selected = track.selectedStep;
+		const targets = !all && selected != null && track.steps[selected]?.on ? [selected]
+			: Array.from({ length: track.length }, (_, i) => i).filter((i) => track.steps[i].on);
+		for (const i of targets) {
+			randomizeGlitchValues(layer);
+			snapshotGlitchStep(layer, track.steps[i]);
+		}
+		if (targets.length) {
+			if (selected != null && track.steps[selected]?.on) loadGlitchStep(layer, track.steps[selected]);
+			if (!state.muted[layer]) {
+				const preview = track.steps[targets[0]];
+				engine.noteOn(layer, preview.notes[0] ?? 60, preview.vel, state.lp[layer], state.structure[layer], state.noiseSrc, preview.locks, false);
+			}
+			R();
+		}
 	}
 
 	function setLayerExtra(layer, key, value) {
@@ -277,6 +301,9 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		loadGlitchStep(layer, step);
 		if (state.recArm && state.structure[layer] === 10 && !Object.keys(step.locks).length) snapshotGlitchStep(layer, step);
 		state.seqNote[layer] = step.notes[0] ?? selectedNoteFor(layer);
+		for (const note of step.notes) {
+			engine.previewNote(layer, note, step.vel, state.lp[layer], state.structure[layer], state.noiseSrc, step.locks, state.muted[layer]);
+		}
 		R();
 	}
 
@@ -345,6 +372,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 					vel: randomPercent(rnd.velMin, rnd.velMax),
 					chance: randomPercent(rnd.chanceMin, rnd.chanceMax),
 					retrigger: previous.on ? previous.retrigger ?? 0 : 0,
+					locks: previous.on ? { ...previous.locks } : {},
 				});
 			} else {
 				track.steps[i].on = false;
@@ -497,7 +525,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		setLayerParam, setLayerExtra, setMaxVoices, setTempo, setVol, playToggle,
 		loadGlitchBase, setGlitchMode, saveGlitchBase,
 		clickStep, setSelectedStepNote, setTrackLength, setTrackDiv, toggleRecArm,
-		randomizeTrack, setRndSetting, randomizeGlitchPerc, setStepRetrigger, randomizeStepRetrigger, delStep, clrTrack, setLock, clrLock,
+		randomizeTrack, setRndSetting, randomizeGlitchPerc, randomizeGlitchStepSounds, setStepRetrigger, randomizeStepRetrigger, delStep, clrTrack, setLock, clrLock,
 		setSlotType, setSlotParam, toggleSlotActive,
 		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive,
 		setArp, arpWays, arpRates, syncArp,
