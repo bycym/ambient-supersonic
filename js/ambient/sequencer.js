@@ -13,11 +13,11 @@
 import { SEQ_DIVS } from "./data.js";
 
 export function newStep() {
-	return { on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, locks: {} };
+	return { on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, retrigger: 0, locks: {} };
 }
 
 export function newRndSettings() {
-	return { density: 30, velMin: 80, velMax: 80, chanceMin: 100, chanceMax: 100 };
+	return { density: 30, activeSteps: -1, velMin: 80, velMax: 80, chanceMin: 100, chanceMax: 100 };
 }
 
 export function newTrack() {
@@ -28,6 +28,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	let playing = false;
 	let tempoBpm = 120;
 	let timer = null;
+	let runId = 0;
 	let metronomeOn = false;
 	let beatOrigin = 0;
 	let nextClickTime = 0;
@@ -104,7 +105,8 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	function scheduleStep(layer, track, when) {
 		const delayMs = Math.max(0, (when - now()) * 1000);
 		const idx = (track.pos + 1) % Math.max(1, track.length);
-		setTimeout(() => fireStep(layer, track, idx, when), delayMs);
+		const scheduledRun = runId;
+		setTimeout(() => { if (scheduledRun === runId) fireStep(layer, track, idx, when); }, delayMs);
 	}
 
 	function fireStep(layer, track, idx, whenSec) {
@@ -115,18 +117,32 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		onStep && onStep(layer, idx);
 		if (step.on && !track.mute && Math.random() < Math.max(0, Math.min(1, step.chance ?? 1))) {
 			const ls = getLayerState(layer);
-			const ids = [];
-			for (const note of step.notes) {
-				const id = engine.noteOn(layer, note, step.vel, ls.lp, ls.structure, ls.noiseSrc, step.locks, ls.muted);
-				if (id != null) ids.push(note);
-			}
-			const offMs = stepBeatDur(track) * (60 / tempoBpm) * step.len * 1000;
-			setTimeout(() => { for (const note of ids) engine.noteOff(layer, note); }, offMs);
+			const notes = step.notes.slice();
+			const locks = Object.assign({}, step.locks);
+			const velocity = step.vel;
+			const extra = Math.max(0, Math.min(7, Math.round(step.retrigger ?? 0)));
+			const sliceMs = stepSecDur(track) * 1000 / (extra + 1);
+			const gateMs = sliceMs * (extra === 0 ? step.len : Math.max(0, Math.min(0.99, step.len)));
+			const activeRun = runId;
+			const hit = () => {
+				if (!playing || activeRun !== runId) return;
+				const ids = [];
+				for (const note of notes) {
+					const id = engine.noteOn(layer, note, velocity, ls.lp, ls.structure, ls.noiseSrc, locks, ls.muted);
+					if (id != null) ids.push(note);
+				}
+				setTimeout(() => {
+					if (activeRun === runId) for (const note of ids) engine.noteOff(layer, note);
+				}, gateMs);
+			};
+			hit();
+			for (let repeat = 1; repeat <= extra; repeat++) setTimeout(hit, repeat * sliceMs);
 		}
 	}
 
 	function start() {
 		if (playing) return;
+		runId++;
 		playing = true;
 		const t = now();
 		const startAt = metronomeOn ? nextBeatAfter(t) : t + 0.05;
@@ -139,6 +155,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	}
 
 	function stop() {
+		runId++;
 		playing = false;
 		stopTimerIfIdle();
 		for (let layer = 0; layer < 4; layer++) engine.layerOff(layer);

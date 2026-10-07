@@ -93,6 +93,11 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		if (state.muted[layer]) { engine.layerOff(layer); unlatchAllOn(layer); }
 		R();
 	}
+	function setLayerFxBypass(layer, bypass) {
+		state.layerFxBypass[layer] = !!bypass;
+		engine.setLayerFxBypass(layer, state.layerFxBypass[layer]);
+		R();
+	}
 
 	async function setStructure(layer, structIdx) {
 		try { await engine.loadEngineFor(layer, structIdx); }
@@ -177,9 +182,11 @@ export function createActions({ state, engine, sequencer, refresh }) {
 
 	function setGlitchMode(layer, mode) {
 		const track = state.seq[layer];
-		if (state.structure[layer] !== 10 || !state.recArm || track.selectedStep == null) return;
+		if (state.structure[layer] !== 10) return;
 		loadGlitchBase(layer, mode);
-		snapshotGlitchStep(layer, track.steps[track.selectedStep]);
+		if (state.recArm && track.selectedStep != null) {
+			snapshotGlitchStep(layer, track.steps[track.selectedStep]);
+		}
 		R();
 	}
 
@@ -198,7 +205,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 
 	function randomizeGlitchPerc(layer) {
 		const track = state.seq[layer];
-		if (state.structure[layer] !== 10 || !state.recArm || track.selectedStep == null) return;
+		if (state.structure[layer] !== 10) return;
 		const random = (lo, hi) => lo + Math.random() * (hi - lo);
 		const expRandom = (lo, hi) => Math.exp(Math.log(lo) + Math.random() * (Math.log(hi) - Math.log(lo)));
 		state.lp[layer].decay = expRandom(0.02, 3);
@@ -207,7 +214,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		state.lp[layer].snap = random(0, 1);
 		state.lp[layer].body = random(0, 1);
 		state.lp[layer].grit = random(0, 1);
-		snapshotGlitchStep(layer, track.steps[track.selectedStep]);
+		if (state.recArm && track.selectedStep != null) snapshotGlitchStep(layer, track.steps[track.selectedStep]);
 		R();
 	}
 
@@ -261,12 +268,12 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		const track = state.seq[layer];
 		if (idx >= track.length) return;
 		const step = track.steps[idx];
+		track.selectedStep = idx;
 		if (!step.on) {
-			if (!state.recArm) return;
+			if (!state.recArm) { R(); return; }
 			step.on = true;
 			step.notes = [defaultNote != null ? defaultNote : selectedNoteFor(layer)];
 		}
-		track.selectedStep = idx;
 		loadGlitchStep(layer, step);
 		if (state.recArm && state.structure[layer] === 10 && !Object.keys(step.locks).length) snapshotGlitchStep(layer, step);
 		state.seqNote[layer] = step.notes[0] ?? selectedNoteFor(layer);
@@ -282,6 +289,17 @@ export function createActions({ state, engine, sequencer, refresh }) {
 			step.notes = [note, ...step.notes.slice(1)];
 		}
 		R();
+	}
+
+	function setStepRetrigger(layer, value) {
+		const track = state.seq[layer];
+		if (!state.recArm || track.selectedStep == null || !track.steps[track.selectedStep].on || !Number.isFinite(value)) return;
+		track.steps[track.selectedStep].retrigger = Math.max(0, Math.min(7, Math.round(value)));
+		R();
+	}
+
+	function randomizeStepRetrigger(layer) {
+		setStepRetrigger(layer, Math.floor(Math.random() * 8));
 	}
 
 	function setTrackLength(layer, len) {
@@ -300,7 +318,6 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	}
 
 	function randomizeTrack(layer) {
-		if (!state.recArm) return;
 		const track = state.seq[layer];
 		const rnd = track.rnd || newRndSettings();
 		const randomPercent = (min, max) => {
@@ -308,15 +325,26 @@ export function createActions({ state, engine, sequencer, refresh }) {
 			const hi = Math.max(0, Math.min(100, Math.max(min, max)));
 			return (lo + Math.floor(Math.random() * (hi - lo + 1))) / 100;
 		};
+		let chosen = null;
+		if (Number.isFinite(rnd.activeSteps) && rnd.activeSteps >= 0) {
+			const positions = Array.from({ length: track.length }, (_, i) => i);
+			for (let i = positions.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[positions[i], positions[j]] = [positions[j], positions[i]];
+			}
+			chosen = new Set(positions.slice(0, Math.min(track.length, Math.floor(rnd.activeSteps))));
+		}
 		const base = selectedNoteFor(layer);
 		const jumps = [0, 3, 5, 7, 10];
 		for (let i = 0; i < track.length; i++) {
-			if (Math.random() < rnd.density / 100) {
+			if (chosen ? chosen.has(i) : Math.random() < rnd.density / 100) {
+				const previous = track.steps[i];
 				track.steps[i] = Object.assign(newStep(), {
 					on: true,
 					notes: [base + 12 + jumps[(Math.random() * jumps.length) | 0]],
 					vel: randomPercent(rnd.velMin, rnd.velMax),
 					chance: randomPercent(rnd.chanceMin, rnd.chanceMax),
+					retrigger: previous.on ? previous.retrigger ?? 0 : 0,
 				});
 			} else {
 				track.steps[i].on = false;
@@ -326,8 +354,8 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		R();
 	}
 	function setRndSetting(layer, key, value) {
-		if (!["density", "velMin", "velMax", "chanceMin", "chanceMax"].includes(key) || !Number.isFinite(value)) return;
-		state.seq[layer].rnd[key] = Math.max(0, Math.min(100, Math.round(value)));
+		if (!["density", "activeSteps", "velMin", "velMax", "chanceMin", "chanceMax"].includes(key) || !Number.isFinite(value)) return;
+		state.seq[layer].rnd[key] = Math.max(key === "activeSteps" ? -1 : 0, Math.min(key === "activeSteps" ? 64 : 100, Math.round(value)));
 		R();
 	}
 
@@ -465,11 +493,11 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	}
 
 	return {
-		selectLayer, toggleMute, setStructure, setWave, setNoiseSrc, setGrainSource,
+		selectLayer, toggleMute, setLayerFxBypass, setStructure, setWave, setNoiseSrc, setGrainSource,
 		setLayerParam, setLayerExtra, setMaxVoices, setTempo, setVol, playToggle,
 		loadGlitchBase, setGlitchMode, saveGlitchBase,
 		clickStep, setSelectedStepNote, setTrackLength, setTrackDiv, toggleRecArm,
-		randomizeTrack, setRndSetting, randomizeGlitchPerc, delStep, clrTrack, setLock, clrLock,
+		randomizeTrack, setRndSetting, randomizeGlitchPerc, setStepRetrigger, randomizeStepRetrigger, delStep, clrTrack, setLock, clrLock,
 		setSlotType, setSlotParam, toggleSlotActive,
 		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive,
 		setArp, arpWays, arpRates, syncArp,

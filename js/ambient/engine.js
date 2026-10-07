@@ -34,7 +34,13 @@ export function createEngine(sonic) {
 	const voices = [new Map(), new Map(), new Map(), new Map()];
 	const oneShotVoices = [new Map(), new Map(), new Map(), new Map()];
 	const held = [[], [], [], []];
+	const layerFxBypass = [false, false, false, false];
 	let maxVoices = 6;
+	function layerOutBus(layer) { return layerFxBypass[layer] ? bus.slot[2] : bus.mix; }
+	function setLayerFxBypass(layer, bypass) {
+		layerFxBypass[layer] = !!bypass;
+		if (grp.layer) sonic.send("/n_set", grp.layer[layer], "out", layerOutBus(layer));
+	}
 
 	let usrChans = 2;
 	let usrLoaded = false;
@@ -144,7 +150,7 @@ export function createEngine(sonic) {
 			voices[layer].delete(oldest);
 			oneShotVoices[layer].delete(oldest);
 		}
-		const args = ["out", bus.mix, "revB", bus.rev, "hz", hz, "vel", vel, "gate", 1];
+		const args = ["out", layerOutBus(layer), "revB", bus.rev, "hz", hz, "vel", vel, "gate", 1];
 		const activeRows = activeEngineSpecs(layer, structure);
 		for (const row of activeRows) {
 			if (lp[row[1]] != null) args.push(row[1], lp[row[1]]);
@@ -375,7 +381,7 @@ export function createEngine(sonic) {
 	return {
 		bus, grp,
 		init, initFixedSynths,
-		defFor, noteOn, noteOff, layerOff, setMaxVoices, loadEngineFor,
+		defFor, noteOn, noteOff, layerOff, setMaxVoices, setLayerFxBypass, layerOutBus, loadEngineFor,
 		loadWave,
 		setSlotType, setSlotParam,
 		setRevShimParam, setMasterParam, setVol,

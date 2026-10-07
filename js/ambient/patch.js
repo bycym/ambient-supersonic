@@ -13,6 +13,7 @@ export function serializePatch(state) {
 	return {
 		layerStruct: state.structure.slice(),
 		layerWave: state.curWave.slice(),
+		layerFxBypass: state.layerFxBypass.slice(),
 		noiseSrc: state.noiseSrc,
 		grainSrc: state.grainSrc,
 		lp: state.lp.map((d) => Object.assign({}, d)),
@@ -28,7 +29,7 @@ export function serializePatch(state) {
 		keyScale: state.keyScale,
 		padKeyBase: state.padKeyBase,
 		seq: state.seq.map((t) => ({
-			steps: t.steps.map((s) => ({ on: s.on, notes: s.notes.slice(), vel: s.vel, chance: s.chance ?? 1, len: s.len, locks: Object.assign({}, s.locks) })),
+			steps: t.steps.map((s) => ({ on: s.on, notes: s.notes.slice(), vel: s.vel, chance: s.chance ?? 1, len: s.len, retrigger: s.retrigger ?? 0, locks: Object.assign({}, s.locks) })),
 			length: t.length,
 			div: t.div,
 			rnd: Object.assign(newRndSettings(), t.rnd),
@@ -46,6 +47,8 @@ export async function applyPatch(state, data, ctx) {
 		state.lp[i] = Object.assign(defaultLayerParams(i), data.lp && data.lp[i] ? data.lp[i] : {});
 	}
 	if (data.muted) state.muted = data.muted.slice();
+	state.layerFxBypass = Array.from({ length: 4 }, (_, i) => !!(data.layerFxBypass && data.layerFxBypass[i]));
+	for (let i = 0; i < 4; i++) engine.setLayerFxBypass(i, state.layerFxBypass[i]);
 	if (data.layerStruct) state.structure = data.layerStruct.slice();
 	while (state.structure.length < 4) state.structure.push(7);
 	if (state.structure[3] < 7) state.structure[3] = 7; // older web patches stored unused NOISE structure as 0
@@ -111,6 +114,7 @@ export async function applyPatch(state, data, ctx) {
 				vel: s.vel != null ? s.vel : 0.8,
 				chance: Math.max(0, Math.min(1, s.chance ?? 1)),
 				len: s.len != null ? s.len : 0.9,
+				retrigger: Math.max(0, Math.min(7, Math.round(s.retrigger ?? 0))),
 				locks: Object.assign({}, s.locks || {}),
 			})),
 			length: t.length || 16,
@@ -123,7 +127,7 @@ export async function applyPatch(state, data, ctx) {
 			const incoming = importedTracks[i] || { steps: [], length: 16, div: 7 };
 			const target = state.seq[i];
 			target.steps = incoming.steps.slice(0, 64);
-			while (target.steps.length < 64) target.steps.push({ on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, locks: {} });
+			while (target.steps.length < 64) target.steps.push({ on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, retrigger: 0, locks: {} });
 			target.length = incoming.length;
 			target.div = incoming.div;
 			target.rnd = incoming.rnd || newRndSettings();

@@ -272,6 +272,12 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	body.appendChild(paramPanel);
 	const structLabel = el("div", "az-struct-label", "");
 	paramPanel.appendChild(structLabel);
+	const layerFxRouteRow = el("div", "az-field-row az-layer-fx-route");
+	paramPanel.appendChild(layerFxRouteRow);
+	layerFxRouteRow.appendChild(el("strong", null, "LAYER FX ROUTE"));
+	const layerFxRouteBtn = mkBtn("THROUGH FX1-3", null, () =>
+		actions.setLayerFxBypass(state.layerSel, !state.layerFxBypass[state.layerSel]));
+	layerFxRouteRow.appendChild(layerFxRouteBtn);
 
 	const dropdownRow = el("div", "az-dropdown-row");
 	paramPanel.appendChild(dropdownRow);
@@ -358,7 +364,10 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		glitchModeRow.appendChild(button);
 		return button;
 	});
-	const glitchRandomButton = mkBtn("RND", "az-glitch-random", () => actions.randomizeGlitchPerc(state.layerSel));
+	const glitchRandomButton = mkBtn("RND", "az-glitch-random", () => {
+		actions.randomizeGlitchPerc(state.layerSel);
+		actions.playNoteMomentary(state.layerSel, state.seqNote[state.layerSel] ?? 60);
+	});
 	glitchModeRow.appendChild(glitchRandomButton);
 	const glitchBaseRow = el("div", "az-glitch-base az-field-row");
 	glitchBaseRow.appendChild(el("span", null, "base"));
@@ -444,10 +453,38 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	}));
 	const rndPanel = el("div", "az-rnd-settings");
 	seqPanel.appendChild(rndPanel);
-	rndPanel.appendChild(el("strong", "az-rnd-heading", "RND SETTINGS · %"));
+	rndPanel.appendChild(el("strong", "az-rnd-heading", "RND SETTINGS"));
+	const rndActiveCounts = state.seq.map((track) => track.rnd.activeSteps >= 0 ? track.rnd.activeSteps : track.length);
+	const rndActiveWrap = el("div", "az-rnd-active");
+	rndActiveWrap.appendChild(el("span", null, "Active steps"));
+	const rndActiveSlider = el("input");
+	rndActiveSlider.type = "range"; rndActiveSlider.min = 0; rndActiveSlider.max = 64; rndActiveSlider.step = 1;
+	rndActiveSlider.setAttribute("aria-label", "Active steps slider");
+	rndActiveSlider.addEventListener("input", () => {
+		rndActiveCounts[state.layerSel] = Number(rndActiveSlider.value);
+		actions.setRndSetting(state.layerSel, "activeSteps", rndActiveCounts[state.layerSel]);
+	});
+	rndActiveWrap.appendChild(rndActiveSlider);
+	const rndActiveNumber = el("input");
+	rndActiveNumber.type = "number"; rndActiveNumber.min = 0; rndActiveNumber.max = 64; rndActiveNumber.step = 1;
+	rndActiveNumber.setAttribute("aria-label", "Exact active step count");
+	rndActiveNumber.addEventListener("change", () => {
+		const layer = state.layerSel;
+		rndActiveCounts[layer] = Number(rndActiveNumber.value);
+		actions.setRndSetting(layer, "activeSteps", rndActiveCounts[layer]);
+		rndActiveNumber.value = state.seq[layer].rnd.activeSteps;
+	});
+	rndActiveWrap.appendChild(rndActiveNumber);
+	const rndModeButton = mkBtn("DENSITY %", "az-rnd-mode", () => {
+		const layer = state.layerSel;
+		actions.setRndSetting(layer, "activeSteps", state.seq[layer].rnd.activeSteps < 0 ? rndActiveCounts[layer] : -1);
+	});
+	rndModeButton.title = "Switch between exact active steps and density percentage";
+	rndActiveWrap.appendChild(rndModeButton);
+	rndPanel.appendChild(rndActiveWrap);
 	const rndInputs = [
-		["density", "Density"], ["velMin", "Vel min"], ["velMax", "Vel max"],
-		["chanceMin", "Chance min"], ["chanceMax", "Chance max"],
+		["density", "Density %"], ["velMin", "Vel min %"], ["velMax", "Vel max %"],
+		["chanceMin", "Chance min %"], ["chanceMax", "Chance max %"],
 	].map(([key, label]) => {
 		const wrap = el("label", "az-rnd-field");
 		wrap.appendChild(el("span", null, label));
@@ -585,6 +622,21 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 
 	const chordReadout = el("div", "az-chord", "(select a step)");
 	seqPanel.appendChild(chordReadout);
+	const retriggerRow = el("div", "az-field-row az-retrigger");
+	seqPanel.appendChild(retriggerRow);
+	retriggerRow.appendChild(el("span", null, "Retrigger (extra hits)"));
+	const retriggerInput = el("input");
+	retriggerInput.type = "number"; retriggerInput.min = 0; retriggerInput.max = 7; retriggerInput.step = 1;
+	retriggerInput.setAttribute("aria-label", "Selected step retrigger count");
+	retriggerInput.addEventListener("change", () => {
+		const track = state.seq[state.layerSel];
+		if (track.selectedStep == null) return;
+		actions.setStepRetrigger(state.layerSel, Number(retriggerInput.value));
+		retriggerInput.value = track.steps[track.selectedStep].retrigger ?? 0;
+	});
+	retriggerRow.appendChild(retriggerInput);
+	const retriggerRndButton = mkBtn("RND RETRIG", null, () => actions.randomizeStepRetrigger(state.layerSel));
+	retriggerRow.appendChild(retriggerRndButton);
 
 	// ---- Param-lock panel ----
 	const lockPanel = el("div", "az-panel az-lock");
@@ -619,7 +671,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	lockBtnRow.appendChild(mkBtn("CLR LOCK", null, () => actions.clrLock(state.layerSel, state.lockSpecId)));
 	const lockStatus = el("div", "az-lock-status", "(select a step)");
 	lockPanel.appendChild(lockStatus);
-	const sequencerOnly = [keysRow, noteRow, seqBtnRow, rndPanel, grid, chordReadout, lockPanel];
+	const sequencerOnly = [keysRow, noteRow, seqBtnRow, rndPanel, grid, chordReadout, retriggerRow, lockPanel];
 
 	// ================= FX chain =================
 	const fxChain = el("div", "az-panel az-fxchain");
@@ -730,6 +782,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		muteBtns.forEach((b, i) => b.classList.toggle("active", state.muted[i]));
 
 		const layer = state.layerSel;
+		const track = state.seq[layer];
 		const isTonal = layer <= 2;
 		const isNoise = layer === 3 && state.structure[layer] === 7;
 		const isGrain = layer === 3 && (state.structure[layer] === 8 || state.structure[layer] === 9);
@@ -741,11 +794,13 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		glitchBaseRow.classList.toggle("hidden", !isGlitchPerc);
 		glitchModeButtons.forEach((button, i) => button.classList.toggle("active", isGlitchPerc && state.lp[layer].mode === i));
 		glitchBaseSelect.value = state.lp[layer].mode ?? 0;
-		const canEditLayer = state.recArm && track.selectedStep != null;
-		glitchModeButtons.forEach((button) => { button.disabled = !isGlitchPerc || !canEditLayer; });
-		glitchRandomButton.disabled = !isGlitchPerc || !canEditLayer;
-		glitchBaseSelect.disabled = !isGlitchPerc || !canEditLayer;
+		glitchModeButtons.forEach((button) => { button.disabled = !isGlitchPerc; });
+		glitchRandomButton.disabled = !isGlitchPerc;
+		glitchBaseSelect.disabled = !isGlitchPerc;
 		structLabel.textContent = LAYERS[layer] + " -- " + (isTonal ? STRUCTURES[state.structure[layer]] : NOISE_STRUCTURES[state.structure[layer] - 7]);
+		layerFxRouteBtn.textContent = state.layerFxBypass[layer] ? "BYPASS FX1-3" : "THROUGH FX1-3";
+		layerFxRouteBtn.classList.toggle("active", state.layerFxBypass[layer]);
+		layerFxRouteBtn.setAttribute("aria-pressed", String(state.layerFxBypass[layer]));
 		structSelectWrap.classList.toggle("hidden", !isTonal);
 		noiseStructWrap.classList.toggle("hidden", isTonal);
 		if (isTonal) structSelect.value = state.structure[layer];
@@ -782,7 +837,6 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		l1destSelect.value = lp.l1dest;
 		l2destSelect.value = lp.l2dest;
 
-		const track = state.seq[layer];
 		gridModeButtons.forEach((b, i) => b.classList.toggle("active", state.padFocus === "eng" && state.padMode === i));
 		[...gridToolbar.querySelectorAll("button")].slice(3).forEach((b, i) => b.classList.toggle("active", state.padFocus === "fx" && state.padFx === i));
 		gridPageSelect.value = state.padPage;
@@ -874,6 +928,12 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		noteSelect.value = noteIndexFromMidi(state.seqNote[layer] ?? 60);
 		lenInput.value = track.length;
 		divSelect.value = track.div;
+		if (track.rnd.activeSteps >= 0) rndActiveCounts[layer] = track.rnd.activeSteps;
+		rndActiveSlider.value = rndActiveCounts[layer];
+		if (document.activeElement !== rndActiveNumber) rndActiveNumber.value = rndActiveCounts[layer];
+		rndModeButton.textContent = track.rnd.activeSteps < 0 ? "DENSITY %" : "EXACT COUNT";
+		rndModeButton.classList.toggle("active", track.rnd.activeSteps < 0);
+		rndModeButton.setAttribute("aria-pressed", String(track.rnd.activeSteps < 0));
 		for (const [key, input] of rndInputs) input.value = track.rnd[key];
 
 		for (let i = 0; i < 64; i++) {
@@ -888,13 +948,17 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		}
 		if (track.selectedStep != null) {
 			const st = track.steps[track.selectedStep];
-			chordReadout.textContent = "notes: " + st.notes.map((n) => NOTE_NAMES[noteIndexFromMidi(n)]).join(",") + `  vel:${st.vel.toFixed(2)}  len:${st.len.toFixed(2)}`;
+			chordReadout.textContent = "notes: " + st.notes.map((n) => NOTE_NAMES[noteIndexFromMidi(n)]).join(",") + `  vel:${st.vel.toFixed(2)}  len:${st.len.toFixed(2)}  retrig:${st.retrigger ?? 0}`;
 			const lockNames = Object.keys(st.locks).map((id) => activeSpecs.find((s) => s[0] === id)?.[2] || id);
 			lockStatus.textContent = lockNames.length ? "locks: " + lockNames.join(", ") : "no locks on this step";
 		} else {
 			chordReadout.textContent = "(select a step)";
 			lockStatus.textContent = "(select a step)";
 		}
+		const canEditRetrigger = state.recArm && track.selectedStep != null && track.steps[track.selectedStep].on;
+		if (document.activeElement !== retriggerInput) retriggerInput.value = track.selectedStep != null ? track.steps[track.selectedStep].retrigger ?? 0 : 0;
+		retriggerInput.disabled = !canEditRetrigger;
+		retriggerRndButton.disabled = !canEditRetrigger;
 		const activeLockRow = activeSpecs.find((s) => s[0] === state.lockSpecId);
 		if (activeLockRow) {
 			lockParamSelect.value = activeSpecs.indexOf(activeLockRow);
