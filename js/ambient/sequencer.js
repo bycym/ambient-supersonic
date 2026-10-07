@@ -13,11 +13,15 @@
 import { SEQ_DIVS } from "./data.js";
 
 export function newStep() {
-	return { on: false, notes: [60], vel: 0.8, len: 0.9, locks: {} };
+	return { on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, locks: {} };
+}
+
+export function newRndSettings() {
+	return { density: 30, velMin: 80, velMax: 80, chanceMin: 100, chanceMax: 100 };
 }
 
 export function newTrack() {
-	return { steps: Array.from({ length: 64 }, newStep), length: 16, div: 7, pos: -1, stepTime: 0, mute: false };
+	return { steps: Array.from({ length: 64 }, newStep), length: 16, div: 7, pos: -1, stepTime: 0, mute: false, rnd: newRndSettings() };
 }
 
 export function createSequencer({ audioContext, engine, getLayerState, onStep, tracks }) {
@@ -109,7 +113,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		track.stepTime = whenSec;
 		const step = track.steps[idx];
 		onStep && onStep(layer, idx);
-		if (step.on && !track.mute) {
+		if (step.on && !track.mute && Math.random() < Math.max(0, Math.min(1, step.chance ?? 1))) {
 			const ls = getLayerState(layer);
 			const ids = [];
 			for (const note of step.notes) {

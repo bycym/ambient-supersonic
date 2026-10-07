@@ -64,6 +64,18 @@
 	color: var(--dim);
 }
 .az-field-row { flex-wrap: wrap; margin-bottom: 4px; }
+.az-rnd-settings {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+	gap: 6px;
+	margin: 8px 0;
+	padding: 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+.az-rnd-heading { grid-column: 1 / -1; color: var(--accent); font-size: 12px; }
+.az-rnd-field { display: flex; flex-direction: column; gap: 4px; color: var(--fg); font-size: 11px; }
+.az-rnd-field input { box-sizing: border-box; width: 100%; }
 
 .az-play.active { background: var(--accent2); border-color: var(--accent2); color: #06121c; }
 .az-rec-master.active { background: var(--danger); border-color: var(--danger); color: #240508; }
