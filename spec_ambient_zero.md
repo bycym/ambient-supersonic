@@ -1,6 +1,6 @@
 # ambient_zero_sc — Web Port Specification
 
-Source of truth: `supercollider_standalone/ambient_zero_sc.scd` (3347 lines, sclang).
+Source of truth: `supercollider_standalone/ambient_zero/ambient_engine.scd` (sclang).
 All line numbers below refer to that file as of this writing. Cross-reference:
 `supercollider_standalone/README.md` (Hungarian user manual, mostly consistent with
 the code — deviations are flagged below).
@@ -1536,7 +1536,7 @@ const AZ = {
 
 ## Appendix B: File cross-reference
 
-- **Primary source**: `supercollider_standalone/ambient_zero_sc.scd` (this spec's
+- **Primary source**: `supercollider_standalone/ambient_zero/ambient_engine.scd` (this spec's
   line numbers refer here).
 - **User manual (Hungarian)**: `supercollider_standalone/README.md` — cross-checked
   against code in §10.3; no material discrepancies found beyond what's noted.
@@ -1550,5 +1550,5 @@ const AZ = {
   `norns_monome/ambient_zero.lua`, `norns_monome/lib/Engine_AmbientZero.sc`,
   `norns_monome/README.md`. Consult these only if a specific synthesis detail in
   the `.scd` file's comments references them for "the full explanation" (several
-  comments in `ambient_zero_sc.scd` explicitly defer detailed UGen-graph
+  comments in `ambient_engine.scd` explicitly defer detailed UGen-graph
   rationale to `Engine_AmbientZero.sc`, e.g. lines 460-465, 514-518).

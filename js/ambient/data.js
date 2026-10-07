@@ -1,4 +1,4 @@
-// Static data tables ported 1:1 from ambient_zero_sc.scd (see spec_ambient_zero.md
+// Static data tables ported 1:1 from ambient_engine.scd (see spec_ambient_zero.md
 // §3 "Layer Parameters", §2.6 "FX Chain", §4 "Wavetable / Structure Generation",
 // §10.5 "LED color palette"). Line numbers below refer to the original .scd file.
 
@@ -88,7 +88,7 @@ export const SPECS = [
 	["glide", "glide", "glide", 0, 5, 0, "s", false],
 	["noisemix", "noiseMix", "noise mix", 0, 1, 0.15, "", false],
 ];
-// Extra engines added to ambient_zero_sc.scd. Rows share the core slider shape:
+// Extra engines added to ambient_engine.scd. Rows share the core slider shape:
 // [id, SynthDef control, label, min, max, default, unit, warp, integer].
 export const VONGON_SPECS = [
 	["vWave", "waveSelect", "waveform", 0, 3, 1, "", false, true], ["vPwm", "pwm", "PWM duty", 0.1, 0.9, 0.5, "", false],

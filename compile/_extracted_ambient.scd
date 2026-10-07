@@ -523,7 +523,7 @@ var nTables = 64, tableSize = 512;
 		RecordBuf.ar(sig, buf, 0, 1, 0, 1, 0, 1, doneAction: 2);
 	}).add;
 
-	// Added engines ported from ambient_zero_sc.scd.
+	// Added engines ported from ambient_engine.scd.
 	SynthDef(\az_vogon, {
 		arg out = 0, revB = 0, hz = 440, gate = 1, vel = 0.8, amp = 0.2,
 			waveSelect = 1, pwm = 0.5, pwmDepth = 0.3, noiseVol = 0.01,
