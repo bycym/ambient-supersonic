@@ -19,22 +19,54 @@ function makeHarness() {
 		setMasterParam() {},
 		setLayerFxBypass() {},
 	};
-	const sequencer = { setTempo() {}, stepDurSeconds() { return 1; } };
+	const sequencer = { setTempo() {}, stepDurSeconds() { return 1; }, noteOffsetFor() { return -0.2; } };
 	return { state, engine, actions: createActions({ state, engine, sequencer, refresh() {} }) };
 }
 
-test("layer parameter writes require REC and selected step", () => {
+test("showMixer selects the persisted mixer page", () => {
 	const { state, actions } = makeHarness();
-	const before = state.lp[0].cut;
-	actions.setLayerParam(0, "cutoff", 1200);
-	assert.equal(state.lp[0].cut, before);
+	assert.equal(state.page, "play");
+	actions.showMixer();
+	assert.equal(state.page, "mixer");
+});
+
+test("live note capture saves offset and joining chord keeps parallel offsets", () => {
+	const { state, actions } = makeHarness();
 	state.recArm = true;
-	actions.setLayerParam(0, "cutoff", 1200);
-	assert.equal(state.lp[0].cut, before);
-	state.seq[0].selectedStep = 0;
+	state.playing = true;
+	actions.recordStepNote(0, 0, 60);
+	assert.deepEqual(state.seq[0].steps[0].offsets, [-0.2]);
+	state.padHeld.set(1, { layer: 0, step: 0 });
+	actions.recordStepNote(0, 0, 64);
+	assert.deepEqual(state.seq[0].steps[0].notes, [60, 64]);
+	assert.deepEqual(state.seq[0].steps[0].offsets, [-0.2, -0.2]);
+});
+
+test("layer parameters edit the base sound and write step locks only while armed", () => {
+	const { state, actions } = makeHarness();
 	actions.setLayerParam(0, "cutoff", 1200);
 	assert.equal(state.lp[0].cut, 1200);
-	assert.equal(state.seq[0].steps[0].locks.cutoff, 1200);
+	assert.equal(state.seq[0].steps[0].locks.cutoff, undefined);
+	state.recArm = true;
+	actions.setLayerParam(0, "cutoff", 1800);
+	assert.equal(state.lp[0].cut, 1800);
+	assert.equal(state.seq[0].steps[0].locks.cutoff, undefined);
+	state.seq[0].selectedStep = 0;
+	actions.setLayerParam(0, "cutoff", 2400);
+	assert.equal(state.lp[0].cut, 2400);
+	assert.equal(state.seq[0].steps[0].locks.cutoff, 2400);
+	state.recArm = false;
+	actions.setLayerParam(0, "cutoff", 3200);
+	assert.equal(state.lp[0].cut, 3200);
+	assert.equal(state.seq[0].steps[0].locks.cutoff, 2400);
+});
+
+test("layer filter and modulation selectors edit the base sound without REC", () => {
+	const { state, actions } = makeHarness();
+	actions.setLayerExtra(0, "ftype", 2);
+	actions.setLayerExtra(0, "modShape", 3);
+	assert.equal(state.lp[0].ftype, 2);
+	assert.equal(state.lp[0].modShape, 3);
 });
 
 test("Glitch mode change snapshots complete selected-step state", () => {
@@ -160,12 +192,15 @@ test("native step chance survives Webport patch export", () => {
 	const state = createState();
 	state.seq[0].steps[0].chance = 0.35;
 	state.seq[0].steps[0].retrigger = 4;
+	state.seq[0].steps[0].notes = [60, 64];
+	state.seq[0].steps[0].offsets = [-0.25, 0.35];
 	state.seq[0].rnd.density = 65;
 	state.seq[0].rnd.activeSteps = 12;
 	state.seq[0].rnd.velMin = 25;
 	const patch = JSON.parse(JSON.stringify(serializePatch(state)));
 	assert.equal(patch.seq[0].steps[0].chance, 0.35);
 	assert.equal(patch.seq[0].steps[0].retrigger, 4);
+	assert.deepEqual(patch.seq[0].steps[0].offsets, [-0.25, 0.35]);
 	assert.equal(patch.seq[0].steps[1].retrigger, 0);
 	assert.equal(patch.seq[0].steps[1].chance, 1);
 	assert.equal(patch.seq[0].rnd.density, 65);
@@ -177,6 +212,8 @@ test("Webport patch load restores retrigger and step sound, with zero for old pa
 	const source = createState();
 	source.seq[3].steps[0].on = true;
 	source.seq[3].steps[0].retrigger = 4;
+	source.seq[3].steps[0].notes = [60, 64];
+	source.seq[3].steps[0].offsets = [-0.25, 0.35];
 	source.seq[3].steps[0].locks = { kMode: 1, kPitch: 7 };
 	const patch = { seq: serializePatch(source).seq };
 	const target = createState();
@@ -186,10 +223,13 @@ test("Webport patch load restores retrigger and step sound, with zero for old pa
 	};
 	await applyPatch(target, patch, ctx);
 	assert.equal(target.seq[3].steps[0].retrigger, 4);
+	assert.deepEqual(target.seq[3].steps[0].offsets, [-0.25, 0.35]);
 	assert.deepEqual(target.seq[3].steps[0].locks, { kMode: 1, kPitch: 7 });
 	delete patch.seq[3].steps[0].retrigger;
+	delete patch.seq[3].steps[0].offsets;
 	await applyPatch(target, patch, ctx);
 	assert.equal(target.seq[3].steps[0].retrigger, 0);
+	assert.deepEqual(target.seq[3].steps[0].offsets, [0, 0]);
 });
 
 test("selected step retrigger needs REC ARM and can be set or randomized", () => {
@@ -282,4 +322,61 @@ test("layer FX bypass changes only the selected layer and survives export", () =
 	actions.setLayerFxBypass(3, true);
 	assert.deepEqual(state.layerFxBypass, [false, false, false, true]);
 	assert.deepEqual(serializePatch(state).layerFxBypass, [false, false, false, true]);
+});
+
+test("mixer trims change route nodes without step locks and persist with safe defaults", async () => {
+	const { state, actions } = makeHarness();
+	const sent = [];
+	actions.setMixerTrim(2, "level", 1.4);
+	actions.setMixerTrim(2, "pan", -0.25);
+	actions.setMixerTrim(2, "send", 0.6);
+	actions.setMixerMute(2, true);
+	assert.deepEqual(state.seq[2].steps[0].locks, {});
+	assert.deepEqual(serializePatch(state).mixerLevel, [1, 1, 1.4, 1]);
+	const target = createState();
+	const engine = {
+		async loadEngineFor() {}, async loadWave() {}, setLayerFxBypass() {}, setMaxVoices() {},
+		setLayerMixer: (...args) => sent.push(args), setVol() {}, setGrainSource() {},
+		async setSlotType() {}, setSlotParam() {}, setRevShimParam() {}, setMasterParam() {},
+	};
+	await applyPatch(target, serializePatch(state), { engine, sequencer: { setTempo() {} }, refreshAll() {} });
+	assert.deepEqual([target.mixerLevel[2], target.mixerPan[2], target.mixerSend[2], target.muted[2]], [1.4, -0.25, 0.6, true]);
+	const legacy = createState();
+	await applyPatch(legacy, {}, { engine, sequencer: { setTempo() {} }, refreshAll() {} });
+	assert.deepEqual([legacy.mixerLevel, legacy.mixerPan, legacy.mixerSend, legacy.muted, legacy.vol], [[1, 1, 1, 1], [0, 0, 0, 0], [1, 1, 1, 1], [false, false, false, false], 0.5]);
+	assert.ok(sent.some(([layer, key, value]) => layer === 2 && key === "level" && value === 1.4));
+});
+
+test("pump and master filters persist; old patches restore bypass defaults", async () => {
+	const { state, actions } = makeHarness();
+	actions.setPumpParam("active", 1);
+	actions.setPumpParam("mode", 0);
+	actions.setPumpParam("source", 2);
+	actions.setPumpParam("release", 0.4);
+	actions.setPumpTarget(3, 1);
+	actions.setMasterParam("hpActive", 1);
+	actions.setMasterParam("hpFreq", 120);
+	const saved = serializePatch(state);
+	assert.deepEqual(saved.pumpParams.targets, [1, 1, 1, 1]);
+	assert.equal(saved.masterParams.hpFreq, 120);
+	const engine = {
+		async loadEngineFor() {}, async loadWave() {}, setLayerFxBypass() {}, setMaxVoices() {},
+		setLayerMixer() {}, setVol() {}, setGrainSource() {}, async setSlotType() {},
+		setSlotParam() {}, setRevShimParam() {}, setMasterParam() {}, setPumpParam() {}, setPumpTarget() {}, setPumpTempo() {},
+	};
+	const target = createState();
+	await applyPatch(target, saved, { engine, sequencer: { setTempo() {} }, refreshAll() {} });
+	assert.equal(target.pumpParams.mode, 0);
+	assert.equal(target.pumpParams.source, 2);
+	assert.equal(target.pumpParams.release, 0.4);
+	assert.deepEqual(target.pumpParams.targets, [1, 1, 1, 1]);
+	assert.equal(target.masterParams.hpActive, 1);
+	delete saved.pumpParams;
+	delete saved.masterParams.hpActive;
+	delete saved.masterParams.hpFreq;
+	await applyPatch(target, saved, { engine, sequencer: { setTempo() {} }, refreshAll() {} });
+	assert.equal(target.pumpParams.active, 0);
+	assert.deepEqual(target.pumpParams.targets, [1, 1, 1, 0]);
+	assert.equal(target.masterParams.hpActive, 0);
+	assert.equal(target.masterParams.hpFreq, 20);
 });

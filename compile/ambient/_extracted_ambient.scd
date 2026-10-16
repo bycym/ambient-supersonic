@@ -323,9 +323,61 @@ var nTables = 64, tableSize = 512;
 		wet = AllpassC.ar(wet, 0.05, [0.0071, 0.0091], 0.03);
 		// this is a parallel send-return (not an insert), so there's no
 		// local "dry" to crossfade against -- just add the wet tail,
-		// scaled by mix/active, into the shared bus it shares with fx3's
-		// output (Out.ar sums onto an existing bus rather than overwriting).
+		// scaled by mix/active, into a separate return bus for stem capture.
 		Out.ar(out, LeakDC.ar(wet) * mix * active.clip(0, 1));
+	}).add;
+
+	// Key is built before routing, from the un-ducked layer signal. This
+	// avoids feedback when the source layer is also a duck target.
+	SynthDef(\az_sidechain_key, { |in0 = 0, in1 = 0, in2 = 0, in3 = 0,
+		out = 0, mode = 1, source = 3, bpm = 120, rate = 1, reset = 0,
+		level0 = 1, level1 = 1, level2 = 1, level3 = 1,
+		mute0 = 0, mute1 = 0, mute2 = 0, mute3 = 0|
+		var inputs, levels, phase, hz, pulse, audioKey, key;
+		inputs = [in0, in1, in2, in3].collect { |bus| Mix.ar(In.ar(bus, 2)) * 0.5 };
+		levels = [level0, level1, level2, level3] *
+			(1 - [mute0, mute1, mute2, mute3]);
+		audioKey = Select.ar(source.clip(0, 3), inputs * levels);
+		hz = (bpm.clip(20, 400) / 60) * Select.kr(rate.clip(0, 2), [0.5, 1, 2]);
+		phase = Phasor.kr(Changed.kr(reset), hz * ControlDur.ir, 0, 1, 0);
+		pulse = (phase < (hz * 0.03).clip(0.001, 0.9));
+		key = Select.ar(mode.clip(0, 1), [audioKey, K2A.ar(pulse)]);
+		Out.ar(out, key);
+	}).add;
+
+	SynthDef(\az_layer_route, { |in = 0, revIn = 0, revOut = 0,
+		fxOut = 0, bypassOut = 0, stemOut = 0, keyIn = 0,
+		bypass = 0, level = 1, pan = 0, send = 1, mute = 0,
+		pumpActive = 0, pumpTarget = 0, pumpThreshold = 0.15,
+		pumpRatio = 8, pumpAttack = 0.005, pumpRelease = 0.25|
+		var amount = bypass.clip(0, 1), gain = level.clip(0, 2) * (1 - mute.clip(0, 1));
+		var balance = [(1 - pan.max(0)), (1 + pan.min(0))];
+		var key = In.ar(keyIn, 1), duckGain, duckAmount;
+		var sig = In.ar(in, 2) * balance * gain;
+		duckGain = Compander.ar(DC.ar(1), key,
+			thresh: pumpThreshold.clip(0.005, 1), slopeBelow: 1,
+			slopeAbove: 1 / pumpRatio.clip(1, 20),
+			clampTime: pumpAttack.clip(0.0005, 0.2),
+			relaxTime: pumpRelease.clip(0.01, 2));
+		duckAmount = Lag.kr(pumpActive.clip(0, 1) * pumpTarget.clip(0, 1), 0.01);
+		duckGain = 1 + ((duckGain - 1) * duckAmount);
+		sig = sig * duckGain;
+		Out.ar(stemOut, sig);
+		Out.ar(fxOut, sig * (1 - amount));
+		Out.ar(bypassOut, sig * amount);
+		Out.ar(revOut, In.ar(revIn, 2) * balance * gain * send.clip(0, 2) * duckGain);
+	}).add;
+
+	SynthDef(\az_fx_stem_tap, { |in = 0, out = 0, stemOut = 0|
+		Out.ar(stemOut, In.ar(out, 2) - In.ar(in, 2));
+	}).add;
+
+	SynthDef(\az_stem_mix, { |bypassIn = 0, reverbIn = 0, out = 0|
+		Out.ar(out, In.ar(bypassIn, 2) + In.ar(reverbIn, 2));
+	}).add;
+
+	SynthDef(\az_stem_output, { |in = 0, out = 0|
+		Out.ar(out, In.ar(in, 2));
 	}).add;
 
 	// ---- MASTER FX: fixed compressor + limiter combo, always the very
@@ -335,9 +387,14 @@ var nTables = 64, tableSize = 512;
 	// közvetlenül a hangkimenet előtt.
 	SynthDef(\az_master_complim, {
 		arg in = 0, out = 0, active = 1, threshold = 0.15, ratio = 4,
-		attack = 0.01, release = 0.15, ceiling = 0.95, makeup = 1, amp = 1;
+		attack = 0.01, release = 0.15, ceiling = 0.95, makeup = 1, amp = 1,
+		hpActive = 0, hpFreq = 20, lpActive = 0, lpFreq = 20000;
 		var dry, comp, sig, inAmp, grAmp, outAmp;
 		dry = In.ar(in, 2);
+		dry = SelectX.ar(Lag.kr(hpActive.clip(0, 1), 0.02),
+			[dry, HPF.ar(dry, hpFreq.clip(20, 2000))]);
+		dry = SelectX.ar(Lag.kr(lpActive.clip(0, 1), 0.02),
+			[dry, LPF.ar(dry, lpFreq.clip(200, 20000))]);
 		comp = Compander.ar(dry, dry,
 			thresh: threshold, slopeBelow: 1, slopeAbove: (1 / ratio.max(1)),
 			clampTime: attack, relaxTime: release);

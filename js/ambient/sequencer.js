@@ -13,7 +13,14 @@
 import { SEQ_DIVS } from "./data.js";
 
 export function newStep() {
-	return { on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, retrigger: 0, locks: {} };
+	return { on: false, notes: [60], offsets: [0], vel: 0.8, chance: 1, len: 0.9, retrigger: 0, locks: {} };
+}
+
+export function noteOffsets(step) {
+	return step.notes.map((_, i) => {
+		const value = step.offsets?.[i];
+		return Number.isFinite(value) ? Math.max(-0.5, Math.min(0.5, value)) : 0;
+	});
 }
 
 export function newRndSettings() {
@@ -28,6 +35,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	let playing = false;
 	let tempoBpm = 120;
 	let timer = null;
+	let pumpAlignTimer = null;
 	let runId = 0;
 	let metronomeOn = false;
 	let beatOrigin = 0;
@@ -90,7 +98,7 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		if (playing) {
 			for (let layer = 0; layer < 4; layer++) {
 				const track = tracks[layer];
-				while (nextStepTime[layer] < t + SCHEDULE_AHEAD_S) {
+				while (nextStepTime[layer] < t + Math.max(SCHEDULE_AHEAD_S, stepSecDur(track) / 2 + 2 * LOOKAHEAD_MS / 1000)) {
 					scheduleStep(layer, track, nextStepTime[layer]);
 					nextStepTime[layer] += stepSecDur(track);
 				}
@@ -109,37 +117,43 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		const idx = nextStepIndex[layer] % length;
 		nextStepIndex[layer] = (idx + 1) % length;
 		const scheduledRun = runId;
-		setTimeout(() => { if (scheduledRun === runId) fireStep(layer, track, idx, when); }, delayMs);
+		setTimeout(() => {
+			if (scheduledRun !== runId) return;
+			track.pos = idx;
+			track.stepTime = when;
+			onStep && onStep(layer, idx);
+		}, delayMs);
+		fireStep(layer, track, idx, when, scheduledRun);
 	}
 
-	function fireStep(layer, track, idx, whenSec) {
+	function fireStep(layer, track, idx, whenSec, scheduledRun) {
 		if (!playing) return;
-		track.pos = idx;
-		track.stepTime = whenSec;
 		const step = track.steps[idx];
-		onStep && onStep(layer, idx);
 		if (step.on && !track.mute && Math.random() < Math.max(0, Math.min(1, step.chance ?? 1))) {
 			const ls = getLayerState(layer);
 			const notes = step.notes.slice();
+			const offsets = noteOffsets(step);
 			const locks = Object.assign({}, step.locks);
 			const velocity = step.vel;
 			const extra = Math.max(0, Math.min(7, Math.round(step.retrigger ?? 0)));
-			const sliceMs = stepSecDur(track) * 1000 / (extra + 1);
+			const stepMs = stepSecDur(track) * 1000;
+			const sliceMs = stepMs / (extra + 1);
 			const gateMs = sliceMs * (extra === 0 ? step.len : Math.max(0, Math.min(0.99, step.len)));
-			const activeRun = runId;
-			const hit = () => {
-				if (!playing || activeRun !== runId) return;
-				const ids = [];
-				for (const note of notes) {
-					const id = engine.noteOn(layer, note, velocity, ls.lp, ls.structure, ls.noiseSrc, locks, ls.muted);
-					if (id != null) ids.push(note);
+			for (let i = 0; i < notes.length; i++) {
+				for (let repeat = 0; repeat <= extra; repeat++) {
+					const at = whenSec * 1000 + offsets[i] * stepMs + repeat * sliceMs;
+					setTimeout(() => {
+						if (!playing || scheduledRun !== runId) return;
+						const id = engine.noteOn(layer, notes[i], velocity, ls.lp, ls.structure, ls.noiseSrc, locks, ls.muted);
+						if (id != null) setTimeout(() => {
+							if (scheduledRun === runId) {
+								if (engine.noteOffIfCurrent) engine.noteOffIfCurrent(layer, notes[i], id);
+								else engine.noteOff(layer, notes[i]);
+							}
+						}, gateMs);
+					}, Math.max(0, at - now() * 1000));
 				}
-				setTimeout(() => {
-					if (activeRun === runId) for (const note of ids) engine.noteOff(layer, note);
-				}, gateMs);
-			};
-			hit();
-			for (let repeat = 1; repeat <= extra; repeat++) setTimeout(hit, repeat * sliceMs);
+			}
 		}
 	}
 
@@ -148,10 +162,17 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		runId++;
 		playing = true;
 		const t = now();
-		const startAt = metronomeOn ? nextBeatAfter(t) : t + 0.05;
+		const maxHalfStep = Math.max(...tracks.map((track) => stepSecDur(track) / 2));
+		const startAt = metronomeOn ? nextBeatAfter(t + maxHalfStep) : t + maxHalfStep + 0.05;
 		if (!metronomeOn) beatOrigin = startAt;
+		if (pumpAlignTimer) clearTimeout(pumpAlignTimer);
+		pumpAlignTimer = setTimeout(() => {
+			pumpAlignTimer = null;
+			if (playing) engine.resetPumpBeat?.();
+		}, Math.max(0, (startAt - now()) * 1000));
 		for (let layer = 0; layer < 4; layer++) {
 			tracks[layer].pos = -1;
+			tracks[layer].stepTime = startAt;
 			nextStepTime[layer] = startAt;
 			nextStepIndex[layer] = 0;
 		}
@@ -161,6 +182,8 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	function stop() {
 		runId++;
 		playing = false;
+		if (pumpAlignTimer) clearTimeout(pumpAlignTimer);
+		pumpAlignTimer = null;
 		stopTimerIfIdle();
 		for (let layer = 0; layer < 4; layer++) engine.layerOff(layer);
 	}
@@ -186,8 +209,16 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 	function nearestStepIndex(layer) {
 		const track = tracks[layer];
 		if (!playing) return null;
+		if (track.pos < 0) return 0;
 		const frac = Math.max(0, Math.min(1, (now() - track.stepTime) / stepSecDur(track)));
 		return frac > 0.5 ? (track.pos + 1) % Math.max(1, track.length) : track.pos;
+	}
+	function noteOffsetFor(layer, idx) {
+		const track = tracks[layer];
+		if (!playing) return 0;
+		const stepDur = stepSecDur(track);
+		const distance = idx === track.pos || track.pos < 0 ? now() - track.stepTime : now() - (track.stepTime + stepDur);
+		return Math.max(-0.5, Math.min(0.5, distance / stepDur));
 	}
 	function stepDurSeconds(layer) { return stepSecDur(tracks[layer]); }
 
@@ -197,6 +228,6 @@ export function createSequencer({ audioContext, engine, getLayerState, onStep, t
 		get playing() { return playing; },
 		setTempo, getTempo, setMetronome,
 		get metronomeOn() { return metronomeOn; },
-		nearestStepIndex, stepDurSeconds,
+		nearestStepIndex, noteOffsetFor, stepDurSeconds,
 	};
 }

@@ -5,7 +5,8 @@
 // apply no matter which input path triggered them.
 
 import { SPEC_BY_ID, activeEngineSpecs, slotDefaults, SCALES, GLITCH_PERC_SNAPSHOT_IDS } from "./data.js";
-import { newStep, newRndSettings } from "./sequencer.js";
+import { newStep, newRndSettings, noteOffsets } from "./sequencer.js";
+import { encodeStep, decodeStep } from "./step-clipboard.js";
 
 export function createActions({ state, engine, sequencer, refresh }) {
 	const R = () => refresh && refresh();
@@ -14,6 +15,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	const arpCursors = Array(4).fill(0);
 	const arpWays = ["UP", "DOWN", "UP/DOWN", "PLAYED", "RANDOM"];
 	const arpRates = [4, 8, 16, 32];
+	let previewGeneration = 0;
 
 	function arpNotes(layer) {
 		const cfg = state.padArp[layer];
@@ -73,6 +75,11 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		R();
 	}
 
+	function showMixer() {
+		state.page = "mixer";
+		R();
+	}
+
 	function selectLayer(layer) {
 		state.layerSel = layer;
 		R();
@@ -90,7 +97,22 @@ export function createActions({ state, engine, sequencer, refresh }) {
 
 	function toggleMute(layer) {
 		state.muted[layer] = !state.muted[layer];
+		engine.setLayerMixer?.(layer, "mute", Number(state.muted[layer]));
 		if (state.muted[layer]) { engine.layerOff(layer); unlatchAllOn(layer); }
+		R();
+	}
+	function setMixerMute(layer, muted) {
+		state.muted[layer] = !!muted;
+		engine.setLayerMixer?.(layer, "mute", Number(state.muted[layer]));
+		R();
+	}
+	function setMixerTrim(layer, key, value) {
+		const property = { level: "mixerLevel", pan: "mixerPan", send: "mixerSend" }[key];
+		if (!property || !Number.isFinite(value)) return;
+		const low = key === "pan" ? -1 : 0;
+		const high = key === "pan" ? 1 : 2;
+		state[property][layer] = Math.max(low, Math.min(high, value));
+		engine.setLayerMixer?.(layer, key, state[property][layer]);
 		R();
 	}
 	function setLayerFxBypass(layer, bypass) {
@@ -140,7 +162,6 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	}
 
 	function setLayerParam(layer, id, value) {
-		if (!state.recArm || state.seq[layer].selectedStep == null) return;
 		const row = SPEC_BY_ID[id];
 		if (!row) return;
 		state.lp[layer][row[1]] = value;
@@ -243,7 +264,6 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	}
 
 	function setLayerExtra(layer, key, value) {
-		if (!state.recArm || state.seq[layer].selectedStep == null) return;
 		state.lp[layer][key] = value;
 		R();
 	}
@@ -257,6 +277,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	function setTempo(bpm) {
 		state.tempoBpm = Math.max(20, Math.min(400, bpm));
 		sequencer.setTempo(state.tempoBpm);
+		engine.setPumpTempo?.(state.tempoBpm);
 		for (let layer = 0; layer < 4; layer++) if (state.padArp[layer].enabled) syncArp(layer);
 		R();
 	}
@@ -297,24 +318,80 @@ export function createActions({ state, engine, sequencer, refresh }) {
 			if (!state.recArm) { R(); return; }
 			step.on = true;
 			step.notes = [defaultNote != null ? defaultNote : selectedNoteFor(layer)];
+			step.offsets = [0];
 		}
 		loadGlitchStep(layer, step);
 		if (state.recArm && state.structure[layer] === 10 && !Object.keys(step.locks).length) snapshotGlitchStep(layer, step);
 		state.seqNote[layer] = step.notes[0] ?? selectedNoteFor(layer);
-		for (const note of step.notes) {
-			engine.previewNote(layer, note, step.vel, state.lp[layer], state.structure[layer], state.noiseSrc, step.locks, state.muted[layer]);
-		}
+		const generation = ++previewGeneration;
+		const offsets = noteOffsets(step);
+		const first = Math.min(...offsets);
+		step.notes.forEach((note, i) => {
+			const play = () => {
+				if (generation === previewGeneration) engine.previewNote(layer, note, step.vel, state.lp[layer], state.structure[layer], state.noiseSrc, step.locks, state.muted[layer]);
+			};
+			const delay = (offsets[i] - first) * sequencer.stepDurSeconds(layer) * 1000;
+			if (delay > 1) setTimeout(play, delay); else play();
+		});
 		R();
 	}
 
-	function setSelectedStepNote(layer, note) {
-		if (!state.recArm) return;
-		state.seqNote[layer] = note;
+	function selectedActiveStep(layer) {
 		const track = state.seq[layer];
-		if (track.selectedStep != null) {
-			const step = track.steps[track.selectedStep];
-			step.notes = [note, ...step.notes.slice(1)];
-		}
+		return track.selectedStep == null ? null : track.steps[track.selectedStep];
+	}
+	function setStepNotePitch(layer, index, note) {
+		const step = selectedActiveStep(layer);
+		if (!state.recArm || !step?.on || !Number.isInteger(note) || note < 0 || note > 127 || index < 0 || index >= step.notes.length) return false;
+		if (step.notes.some((pitch, i) => i !== index && pitch === note)) return false;
+		step.notes[index] = note;
+		if (index === 0) state.seqNote[layer] = note;
+		R();
+		return true;
+	}
+	function addStepNote(layer, note) {
+		const step = selectedActiveStep(layer);
+		if (!state.recArm || !step?.on || !Number.isInteger(note) || note < 0 || note > 127 || step.notes.includes(note)) return false;
+		step.notes.push(note);
+		step.offsets = [...noteOffsets(step).slice(0, -1), 0];
+		R();
+		return true;
+	}
+	function removeStepNote(layer, index) {
+		const step = selectedActiveStep(layer);
+		if (!state.recArm || !step?.on || index < 0 || index >= step.notes.length) return false;
+		const offsets = noteOffsets(step);
+		step.notes.splice(index, 1);
+		offsets.splice(index, 1);
+		step.offsets = offsets;
+		if (!step.notes.length) { step.on = false; step.notes = [60]; step.offsets = [0]; }
+		R();
+		return true;
+	}
+	function setStepNoteOffset(layer, index, offset, refresh = true) {
+		const step = selectedActiveStep(layer);
+		if (!state.recArm || !step?.on || index < 0 || index >= step.notes.length || !Number.isFinite(offset)) return false;
+		step.offsets = noteOffsets(step);
+		step.offsets[index] = Math.max(-0.5, Math.min(0.5, offset));
+		if (refresh) R();
+		return true;
+	}
+	function copySelectedStep(layer) {
+		const step = selectedActiveStep(layer);
+		return step ? encodeStep(step) : null;
+	}
+	function pasteSelectedStep(layer, json) {
+		const step = decodeStep(json);
+		const track = state.seq[layer];
+		if (track.selectedStep == null) return false;
+		track.steps[track.selectedStep] = step;
+		R();
+		return true;
+	}
+
+	function setSelectedStepNote(layer, note) {
+		state.seqNote[layer] = note;
+		setStepNotePitch(layer, 0, note);
 		R();
 	}
 
@@ -369,6 +446,7 @@ export function createActions({ state, engine, sequencer, refresh }) {
 				track.steps[i] = Object.assign(newStep(), {
 					on: true,
 					notes: [base + 12 + jumps[(Math.random() * jumps.length) | 0]],
+					offsets: [0],
 					vel: randomPercent(rnd.velMin, rnd.velMax),
 					chance: randomPercent(rnd.chanceMin, rnd.chanceMax),
 					retrigger: previous.on ? previous.retrigger ?? 0 : 0,
@@ -449,8 +527,28 @@ export function createActions({ state, engine, sequencer, refresh }) {
 		R();
 	}
 	function setMasterParam(key, value) {
+		if (!Number.isFinite(value)) return;
+		if (key === "hpFreq") value = Math.max(20, Math.min(2000, value));
+		if (key === "lpFreq") value = Math.max(200, Math.min(20000, value));
+		if (key === "hpActive" || key === "lpActive") value = value ? 1 : 0;
 		state.masterParams[key] = value;
 		engine.setMasterParam(key, value);
+		R();
+	}
+	function setPumpParam(key, value) {
+		const limits = { active: [0, 1], mode: [0, 1], source: [0, 3], rate: [0, 2], threshold: [0.005, 1], ratio: [1, 20], attack: [0.0005, 0.2], release: [0.01, 2] };
+		const range = limits[key];
+		if (!range || !Number.isFinite(value)) return;
+		value = Math.max(range[0], Math.min(range[1], value));
+		if (["active", "mode", "source", "rate"].includes(key)) value = Math.round(value);
+		state.pumpParams[key] = value;
+		engine.setPumpParam?.(key, value);
+		R();
+	}
+	function setPumpTarget(layer, value) {
+		if (!Number.isInteger(layer) || layer < 0 || layer > 3) return;
+		state.pumpParams.targets[layer] = value ? 1 : 0;
+		engine.setPumpTarget?.(layer, state.pumpParams.targets[layer]);
 		R();
 	}
 	function toggleMasterActive() {
@@ -489,9 +587,13 @@ export function createActions({ state, engine, sequencer, refresh }) {
 			[...state.padHeld.values()].some((h) => h.layer === layer && h.step === idx);
 		step.on = true;
 		if (joining) {
-			if (!step.notes.includes(pitch)) step.notes.push(pitch);
+			if (!step.notes.includes(pitch)) {
+				step.notes.push(pitch);
+				(step.offsets ||= []).push(state.playing ? sequencer.noteOffsetFor(layer, idx) : 0);
+			}
 		} else {
 			step.notes = [pitch];
+			step.offsets = [state.playing ? sequencer.noteOffsetFor(layer, idx) : 0];
 		}
 		if (state.structure[layer] === 10) snapshotGlitchStep(layer, step);
 		R();
@@ -521,16 +623,17 @@ export function createActions({ state, engine, sequencer, refresh }) {
 	}
 
 	return {
-		selectLayer, toggleMute, setLayerFxBypass, setStructure, setWave, setNoiseSrc, setGrainSource,
+		selectLayer, toggleMute, setMixerMute, setMixerTrim, setLayerFxBypass, setStructure, setWave, setNoiseSrc, setGrainSource,
 		setLayerParam, setLayerExtra, setMaxVoices, setTempo, setVol, playToggle,
 		loadGlitchBase, setGlitchMode, saveGlitchBase,
-		clickStep, setSelectedStepNote, setTrackLength, setTrackDiv, toggleRecArm,
+		clickStep, setSelectedStepNote, setStepNotePitch, addStepNote, removeStepNote, setStepNoteOffset,
+		copySelectedStep, pasteSelectedStep, setTrackLength, setTrackDiv, toggleRecArm,
 		randomizeTrack, setRndSetting, randomizeGlitchPerc, randomizeGlitchStepSounds, setStepRetrigger, randomizeStepRetrigger, delStep, clrTrack, setLock, clrLock,
 		setSlotType, setSlotParam, toggleSlotActive,
-		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive,
+		setRevShimParam, toggleRevShimActive, setMasterParam, toggleMasterActive, setPumpParam, setPumpTarget,
 		setArp, arpWays, arpRates, syncArp,
 		playNoteMomentary, stopNoteMomentary, recordStepNote, recordStepLength,
-		keyDegreeToPitch,
+		keyDegreeToPitch, showMixer,
 		loadSampleFile, loadGrainSampleFile,
 		selectedNoteFor,
 	};

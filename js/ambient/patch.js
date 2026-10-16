@@ -5,7 +5,8 @@
 
 import { listPatches, savePatch, loadPatch, deletePatch, exportAzpatchBlob, importAzpatchFile, buildShareUrl, readPatchFromUrl, renderShareQr } from "../shared/patch-share.js";
 import { SLOT_SPECS, activeEngineSpecs, defaultLayerParams } from "./data.js";
-import { newRndSettings } from "./sequencer.js";
+import { newRndSettings, newStep, noteOffsets } from "./sequencer.js";
+import { defaultMasterParams, defaultPumpParams } from "./state.js";
 
 const NS = "ambient";
 
@@ -14,14 +15,16 @@ export function serializePatch(state) {
 		layerStruct: state.structure.slice(),
 		layerWave: state.curWave.slice(),
 		layerFxBypass: state.layerFxBypass.slice(),
+		mixerLevel: state.mixerLevel.slice(), mixerPan: state.mixerPan.slice(),
+		mixerSend: state.mixerSend.slice(), muted: state.muted.slice(), masterVolume: state.vol,
 		noiseSrc: state.noiseSrc,
 		grainSrc: state.grainSrc,
 		lp: state.lp.map((d) => Object.assign({}, d)),
-		muted: state.muted.slice(),
 		slotType: state.slotType.slice(),
 		slotParams: state.slotParams.map((d) => Object.assign({}, d)),
 		revShimParams: Object.assign({}, state.revShimParams),
 		masterParams: Object.assign({}, state.masterParams),
+		pumpParams: { ...state.pumpParams, targets: state.pumpParams.targets.slice() },
 		glitchBases: state.glitchBases.map((base) => Object.assign({}, base)),
 		tempoBpm: state.tempoBpm,
 		maxVoices: state.maxVoices,
@@ -29,7 +32,7 @@ export function serializePatch(state) {
 		keyScale: state.keyScale,
 		padKeyBase: state.padKeyBase,
 		seq: state.seq.map((t) => ({
-			steps: t.steps.map((s) => ({ on: s.on, notes: s.notes.slice(), vel: s.vel, chance: s.chance ?? 1, len: s.len, retrigger: s.retrigger ?? 0, locks: Object.assign({}, s.locks) })),
+			steps: t.steps.map((s) => ({ on: s.on, notes: s.notes.slice(), offsets: noteOffsets(s), vel: s.vel, chance: s.chance ?? 1, len: s.len, retrigger: s.retrigger ?? 0, locks: Object.assign({}, s.locks) })),
 			length: t.length,
 			div: t.div,
 			rnd: Object.assign(newRndSettings(), t.rnd),
@@ -46,7 +49,20 @@ export async function applyPatch(state, data, ctx) {
 	for (let i = 0; i < 4; i++) {
 		state.lp[i] = Object.assign(defaultLayerParams(i), data.lp && data.lp[i] ? data.lp[i] : {});
 	}
-	if (data.muted) state.muted = data.muted.slice();
+	state.muted = Array.from({ length: 4 }, (_, i) => !!data.muted?.[i]);
+	for (const [property, key, fallback, low, high] of [
+		["mixerLevel", "level", 1, 0, 2], ["mixerPan", "pan", 0, -1, 1], ["mixerSend", "send", 1, 0, 2],
+	]) {
+		state[property] = Array.from({ length: 4 }, (_, i) => {
+			const value = data[property]?.[i];
+			return typeof value === "number" && Number.isFinite(value) ? Math.max(low, Math.min(high, value)) : fallback;
+		});
+		for (let i = 0; i < 4; i++) engine.setLayerMixer?.(i, key, state[property][i]);
+	}
+	for (let i = 0; i < 4; i++) engine.setLayerMixer?.(i, "mute", Number(state.muted[i]));
+	state.vol = typeof data.masterVolume === "number" && Number.isFinite(data.masterVolume)
+		? Math.max(0, Math.min(1, data.masterVolume)) : 0.5;
+	engine.setVol?.(state.vol);
 	state.layerFxBypass = Array.from({ length: 4 }, (_, i) => !!(data.layerFxBypass && data.layerFxBypass[i]));
 	for (let i = 0; i < 4; i++) engine.setLayerFxBypass(i, state.layerFxBypass[i]);
 	if (data.layerStruct) state.structure = data.layerStruct.slice();
@@ -86,14 +102,18 @@ export async function applyPatch(state, data, ctx) {
 		state.revShimParams = Object.assign({}, state.revShimParams, data.revShimParams);
 		for (const k in state.revShimParams) engine.setRevShimParam(k, state.revShimParams[k]);
 	}
-	if (data.masterParams) {
-		state.masterParams = Object.assign({}, state.masterParams, data.masterParams);
-		for (const k in state.masterParams) engine.setMasterParam(k, state.masterParams[k]);
-	}
+	state.masterParams = Object.assign(defaultMasterParams(), data.masterParams || {});
+	for (const k in state.masterParams) engine.setMasterParam?.(k, state.masterParams[k]);
+	const pump = data.pumpParams || {};
+	state.pumpParams = Object.assign(defaultPumpParams(), pump);
+	state.pumpParams.targets = Array.from({ length: 4 }, (_, i) => pump.targets?.[i] ? 1 : pump.targets ? 0 : [1, 1, 1, 0][i]);
+	for (const k of ["active", "mode", "source", "rate", "threshold", "ratio", "attack", "release"]) engine.setPumpParam?.(k, state.pumpParams[k]);
+	for (let i = 0; i < 4; i++) engine.setPumpTarget?.(i, state.pumpParams.targets[i]);
 	const tempo = data.tempoBpm != null ? data.tempoBpm : data.tempo;
 	if (tempo != null) {
 		state.tempoBpm = tempo;
-		sequencer && sequencer.setTempo(tempo);
+			sequencer && sequencer.setTempo(tempo);
+			engine.setPumpTempo?.(tempo);
 	}
 	if (data.maxVoices) { state.maxVoices = data.maxVoices; engine.setMaxVoices(data.maxVoices); }
 	state.keyRoot = data.keyRoot != null ? data.keyRoot : state.keyRoot;
@@ -111,6 +131,7 @@ export async function applyPatch(state, data, ctx) {
 			steps: (t.steps || []).map((s) => ({
 				on: !!s.on,
 				notes: (s.notes || (s.note != null ? [s.note] : [60])).slice(),
+				offsets: noteOffsets({ notes: s.notes || (s.note != null ? [s.note] : [60]), offsets: s.offsets }),
 				vel: s.vel != null ? s.vel : 0.8,
 				chance: Math.max(0, Math.min(1, s.chance ?? 1)),
 				len: s.len != null ? s.len : 0.9,
@@ -127,7 +148,7 @@ export async function applyPatch(state, data, ctx) {
 			const incoming = importedTracks[i] || { steps: [], length: 16, div: 7 };
 			const target = state.seq[i];
 			target.steps = incoming.steps.slice(0, 64);
-			while (target.steps.length < 64) target.steps.push({ on: false, notes: [60], vel: 0.8, chance: 1, len: 0.9, retrigger: 0, locks: {} });
+			while (target.steps.length < 64) target.steps.push(newStep());
 			target.length = incoming.length;
 			target.div = incoming.div;
 			target.rnd = incoming.rnd || newRndSettings();

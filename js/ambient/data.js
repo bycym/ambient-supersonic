@@ -27,11 +27,11 @@ export const WAVE_NAMES = [
 
 export const NOISE_SRC_NAMES = ["RAIN", "WIND", "OCEAN", "STREAM", "FIRE", "FOREST", "THUNDER", "NIGHT", "LINE IN", "WAV FILE"];
 
-// note dropdown: index 0..60 -> MIDI 12..72 (C0..C5)
+// note dropdown: index 0..96 -> MIDI 12..108 (C0..C8)
 export const NOTE_NAMES = (() => {
 	const pc = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 	const out = [];
-	for (let i = 0; i <= 60; i++) {
+	for (let i = 0; i <= 96; i++) {
 		const midi = i + 12;
 		const oct = Math.floor(midi / 12) - 1;
 		out.push(pc[midi % 12] + oct);
@@ -39,7 +39,7 @@ export const NOTE_NAMES = (() => {
 	return out;
 })();
 export function midiFromNoteIndex(i) { return i + 12; }
-export function noteIndexFromMidi(m) { return Math.max(0, Math.min(60, m - 12)); }
+export function noteIndexFromMidi(m) { return Math.max(0, Math.min(96, m - 12)); }
 
 export const SCALE_NAMES = ["MAJOR", "MINOR", "DORIAN", "PHRYG", "LYDIAN", "MIXO", "HARM MIN", "MIN PENT", "MAJ PENT", "WHOLE"];
 export const SCALES = [
@@ -57,8 +57,8 @@ export const SCALES = [
 export const ROOT_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 // ---- Sequencer clock divisions (line 1167) ----
-export const SEQ_DIVS = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8];
-export const SEQ_DIV_NAMES = ["1/1", "1/2", "1/4", "1/4.", "1/8", "1/8t", "1/16", "1/16t", "1/32"];
+export const SEQ_DIVS = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12];
+export const SEQ_DIV_NAMES = ["1/1", "1/2", "1/4", "1/4.", "1/8", "1/8t", "1/16", "1/16t", "1/32", "1/32t"];
 
 // ---- The 25 layer-parameter specs (lines 423-449): [id, key, name, min, max, default, unit, warp] ----
 export const SPECS = [
@@ -186,6 +186,8 @@ export function slotDefaults(typeIdx) {
 // fixed reverb+shimmer / master boxes (§2.7 / §2.8)
 export const REVSHIM_SPECS = [["size", "size", 0, 1, 0.7, false], ["decay", "decay", 0, 0.99, 0.72, false], ["damp", "damp", 0, 1, 0.35, false], ["shimmer", "shimmer", 0, 1, 0.3, false], ["mix", "mix", 0, 1, 1.0, false]];
 export const MASTER_SPECS = [["threshold", "threshold", 0.005, 1, 0.15, true], ["ratio", "ratio", 1, 20, 4, true], ["attack", "attack", 0.0005, 0.2, 0.01, true], ["release", "release", 0.01, 1, 0.15, true], ["makeup", "makeup", 0.25, 8, 1, true], ["ceiling", "ceiling", 0.05, 1, 0.95, false]];
+export const PUMP_SPECS = [["threshold", "threshold", 0.005, 1, 0.15, true], ["ratio", "ratio", 1, 20, 8, true], ["attack s", "attack", 0.0005, 0.2, 0.005, true], ["release s", "release", 0.01, 2, 0.25, true]];
+export const MASTER_FILTER_SPECS = [["HIGH PASS", "hpActive", "hpFreq", 20, 2000], ["LOW PASS", "lpActive", "lpFreq", 200, 20000]];
 
 // ---- Warp formula (§3, identical for slot-fx and layer specs; lines 1646-1650 etc) ----
 export function warpValue(lo, hi, n, warp) {

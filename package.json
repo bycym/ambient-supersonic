@@ -1,7 +1,7 @@
 {
-  "name": "supersonic-webport-app",
+  "name": "ambient-zero-webport",
   "version": "1.0.0",
-  "description": "A static local application to serve compiled SuperCollider SynthDefs to SuperSonic via WebAssembly",
+  "description": "Ambient Zero browser instrument powered by SuperCollider SynthDefs and SuperSonic WebAssembly",
   "main": "index.html",
   "type": "module",
   "scripts": {

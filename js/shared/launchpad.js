@@ -1,12 +1,11 @@
 // Generic Novation Launchpad Pro (Programmer Mode) driver over Web MIDI.
-// Shared by ambient_zero and granular_zero web ports — instrument-specific
-// button/LED semantics live in each app module; this module only knows how
+// Used by the Ambient Zero web port — app-specific button/LED semantics live
+// in its controller; this module only knows how
 // to find the device, speak its SysEx protocol, diff/throttle LED writes,
 // and hand back debounced note/CC events.
 //
 // Ported 1:1 from ~az.setupMIDI / ~az.padSysex / ~az.padCache in
-// ambient_engine.scd (see spec_ambient_zero.md §10.6) — granular_zero_sc.scd
-// uses the identical protocol.
+// ambient_engine.scd (see spec_ambient_zero.md §10.6).
 
 const SYSEX_HEADER = [0xf0, 0x00, 0x20, 0x29, 0x02, 0x10];
 const SYSEX_FOOTER = 0xf7;

@@ -15,32 +15,48 @@ const GRAIN_REC_BUFNUM = 194;
 const GRAIN_USR_BUFNUM = 195;
 const GRAIN_HEAD_BUS = 0;
 
-export function createEngine(sonic) {
+export function createEngine(sonic, { outputChannels = 2, inputChannels = 2, masterNode = sonic.node } = {}) {
 	// Private audio buses start right after in+out hardware channels
-	// (numOutputBusChannels + numInputBusChannels = 2 + 2, per the loader's
-	// scsynthOptions in supersonic-loader.js).
-	const busBase = 4;
+	const busBase = outputChannels + inputChannels;
 	const bus = {
-		mix: busBase,
-		slot: [busBase + 2, busBase + 4, busBase + 6],
-		rev: busBase + 8,
+		layer: [busBase, busBase + 2, busBase + 4, busBase + 6],
+		mix: busBase + 8,
+		slot: [busBase + 10, busBase + 12, busBase + 14],
+		rev: busBase + 16,
+		revReturn: busBase + 18,
+		bypass: busBase + 20,
+		fxStem: [busBase + 22, busBase + 24, busBase + 26],
+		layerRev: [busBase + 28, busBase + 30, busBase + 32, busBase + 34],
+		duckedLayer: [busBase + 36, busBase + 38, busBase + 40, busBase + 42],
+		sidechainKey: busBase + 44,
 	};
 
 	const grp = {};
 	const slotSynthId = [null, null, null];
 	const revShimId = { id: null };
+	const sidechainKeyId = { id: null };
 	const masterId = { id: null };
+	const layerRouteIds = [null, null, null, null];
 
 	// voices[layer] : Map<midiNote, nodeId>   held[layer]: [midiNote,...] oldest-first
 	const voices = [new Map(), new Map(), new Map(), new Map()];
 	const oneShotVoices = [new Map(), new Map(), new Map(), new Map()];
 	const held = [[], [], [], []];
 	const layerFxBypass = [false, false, false, false];
+	const layerMixer = Array.from({ length: 4 }, () => ({ level: 1, pan: 0, send: 1, mute: 0 }));
 	let maxVoices = 6;
-	function layerOutBus(layer) { return layerFxBypass[layer] ? bus.slot[2] : bus.mix; }
+	function layerOutBus(layer) { return bus.layer[layer]; }
 	function setLayerFxBypass(layer, bypass) {
 		layerFxBypass[layer] = !!bypass;
-		if (grp.layer) sonic.send("/n_set", grp.layer[layer], "out", layerOutBus(layer));
+		if (layerRouteIds[layer] != null) sonic.send("/n_set", layerRouteIds[layer], "bypass", Number(layerFxBypass[layer]));
+	}
+	function setLayerMixer(layer, key, value) {
+		if (!Object.hasOwn(layerMixer[layer], key) || !Number.isFinite(value)) return;
+		layerMixer[layer][key] = value;
+		if (layerRouteIds[layer] != null) sonic.send("/n_set", layerRouteIds[layer], key, value);
+		if ((key === "level" || key === "mute") && sidechainKeyId.id != null) {
+			sonic.send("/n_set", sidechainKeyId.id, `${key}${layer}`, value);
+		}
 	}
 
 	let usrChans = 2;
@@ -61,16 +77,28 @@ export function createEngine(sonic) {
 			await sonic.send("/g_new", id, 1, grp.root);
 			grp.layer.push(id);
 		}
+		grp.sidechainKey = sonic.nextNodeId();
+		await sonic.send("/g_new", grp.sidechainKey, 1, grp.root);
+		grp.layerRoute = sonic.nextNodeId();
+		await sonic.send("/g_new", grp.layerRoute, 1, grp.root);
 		grp.slot = [];
+		grp.fxTap = [];
 		for (let i = 0; i < 3; i++) {
 			const id = sonic.nextNodeId();
 			await sonic.send("/g_new", id, 1, grp.root);
 			grp.slot.push(id);
+			const tapId = sonic.nextNodeId();
+			await sonic.send("/g_new", tapId, 1, grp.root);
+			grp.fxTap.push(tapId);
 		}
 		grp.revShim = sonic.nextNodeId();
 		await sonic.send("/g_new", grp.revShim, 1, grp.root);
+		grp.stemMix = sonic.nextNodeId();
+		await sonic.send("/g_new", grp.stemMix, 1, grp.root);
 		grp.master = sonic.nextNodeId();
 		await sonic.send("/g_new", grp.master, 1, grp.root);
+		grp.stemOut = sonic.nextNodeId();
+		await sonic.send("/g_new", grp.stemOut, 1, grp.root);
 
 		// wavetable banks: 3 layers x 64 mono buffers, 1024 frames each (tableSize*2)
 		for (let layer = 0; layer < 3; layer++) {
@@ -137,7 +165,7 @@ export function createEngine(sonic) {
 
 	function voiceArgs(layer, note, vel, lp, structure, noiseSrc, locks) {
 		const hz = 440 * Math.pow(2, (note - 69) / 12);
-		const args = ["out", layerOutBus(layer), "revB", bus.rev, "hz", hz, "vel", vel, "gate", 1];
+		const args = ["out", layerOutBus(layer), "revB", bus.layerRev[layer], "hz", hz, "vel", vel, "gate", 1];
 		const activeRows = activeEngineSpecs(layer, structure);
 		for (const row of activeRows) {
 			if (lp[row[1]] != null) args.push(row[1], lp[row[1]]);
@@ -202,6 +230,9 @@ export function createEngine(sonic) {
 		const hi = held[layer].indexOf(note);
 		if (hi >= 0) held[layer].splice(hi, 1);
 	}
+	function noteOffIfCurrent(layer, note, id) {
+		if (voices[layer].get(note) === id) noteOff(layer, note);
+	}
 
 	function layerOff(layer) {
 		for (const [note, id] of voices[layer]) {
@@ -253,12 +284,46 @@ export function createEngine(sonic) {
 	}
 
 	async function initFixedSynths(defaults) {
+		const pump = defaults.pump || { active: 0, mode: 1, source: 3, targets: [1, 1, 1, 0], threshold: 0.15, ratio: 8, attack: 0.005, release: 0.25, rate: 1 };
+		sidechainKeyId.id = sonic.nextNodeId();
+		sonic.send("/s_new", "az_sidechain_key", sidechainKeyId.id, 1, grp.sidechainKey,
+			"in0", bus.layer[0], "in1", bus.layer[1], "in2", bus.layer[2], "in3", bus.layer[3],
+			"out", bus.sidechainKey, "mode", pump.mode, "source", pump.source,
+			"rate", pump.rate, "bpm", defaults.bpm || 120,
+			...layerMixer.flatMap((m, i) => [`level${i}`, m.level, `mute${i}`, m.mute]));
+		for (let layer = 0; layer < 4; layer++) {
+			const id = sonic.nextNodeId();
+			sonic.send("/s_new", "az_layer_route", id, 1, grp.layerRoute,
+				"in", bus.layer[layer], "fxOut", bus.mix, "bypassOut", bus.bypass,
+				"revIn", bus.layerRev[layer], "revOut", bus.rev,
+				"stemOut", bus.duckedLayer[layer], "keyIn", bus.sidechainKey,
+				"bypass", Number(layerFxBypass[layer]),
+				"pumpActive", pump.active, "pumpTarget", pump.targets[layer],
+				"pumpThreshold", pump.threshold, "pumpRatio", pump.ratio,
+				"pumpAttack", pump.attack, "pumpRelease", pump.release,
+				...flattenParams(layerMixer[layer]));
+			layerRouteIds[layer] = id;
+		}
+		for (let slot = 0; slot < 3; slot++) {
+			const inBus = slot === 0 ? bus.mix : bus.slot[slot - 1];
+			sonic.send("/s_new", "az_fx_stem_tap", sonic.nextNodeId(), 1, grp.fxTap[slot],
+				"in", inBus, "out", bus.slot[slot], "stemOut", bus.fxStem[slot]);
+		}
 		revShimId.id = sonic.nextNodeId();
 		sonic.send("/s_new", "az_master_revshim", revShimId.id, 0, grp.revShim,
-			"in", bus.rev, "out", bus.slot[2], ...flattenParams(defaults.revShim));
+			"in", bus.rev, "out", bus.revReturn, ...flattenParams(defaults.revShim));
+		sonic.send("/s_new", "az_stem_mix", sonic.nextNodeId(), 1, grp.stemMix,
+			"bypassIn", bus.bypass, "reverbIn", bus.revReturn, "out", bus.slot[2]);
 		masterId.id = sonic.nextNodeId();
 		sonic.send("/s_new", "az_master_complim", masterId.id, 0, grp.master,
 			"in", bus.slot[2], "out", 0, ...flattenParams(defaults.master));
+		if (outputChannels >= 18) {
+			const sourceBuses = [...bus.duckedLayer, ...bus.fxStem, bus.revReturn];
+			for (let i = 0; i < sourceBuses.length; i++) {
+				sonic.send("/s_new", "az_stem_output", sonic.nextNodeId(), 1, grp.stemOut,
+					"in", sourceBuses[i], "out", 2 + i * 2);
+			}
+		}
 	}
 
 	function flattenParams(obj) {
@@ -269,6 +334,25 @@ export function createEngine(sonic) {
 
 	function setRevShimParam(key, value) { if (revShimId.id != null) sonic.send("/n_set", revShimId.id, key, value); }
 	function setMasterParam(key, value) { if (masterId.id != null) sonic.send("/n_set", masterId.id, key, value); }
+	function setPumpParam(key, value) {
+		if (["mode", "source", "rate"].includes(key)) {
+			if (sidechainKeyId.id != null) sonic.send("/n_set", sidechainKeyId.id, key, value);
+			return;
+		}
+		const routeKey = { active: "pumpActive", threshold: "pumpThreshold", ratio: "pumpRatio", attack: "pumpAttack", release: "pumpRelease" }[key];
+		if (routeKey) for (const id of layerRouteIds) if (id != null) sonic.send("/n_set", id, routeKey, value);
+	}
+	function setPumpTarget(layer, value) {
+		if (layerRouteIds[layer] != null) sonic.send("/n_set", layerRouteIds[layer], "pumpTarget", value);
+	}
+	function setPumpTempo(bpm) {
+		if (sidechainKeyId.id != null) sonic.send("/n_set", sidechainKeyId.id, "bpm", bpm);
+	}
+	let pumpReset = 0;
+	function resetPumpBeat() {
+		pumpReset = 1 - pumpReset;
+		if (sidechainKeyId.id != null) sonic.send("/n_set", sidechainKeyId.id, "reset", pumpReset);
+	}
 	function setVol(sliderVal) {
 		// linlin(0,1, 0,2): slider 0.5 = unity gain
 		const amp = sliderVal * 2;
@@ -371,15 +455,15 @@ export function createEngine(sonic) {
 	// ---- Master-output-to-file recording (spec §11 item 6) ---------------
 
 	function startMasterRecording() {
-		if (!sonic.node || !sonic.audioContext) return null;
+		if (!masterNode || !sonic.audioContext) return null;
 		const dest = sonic.audioContext.createMediaStreamDestination();
-		sonic.node.connect(dest);
+		masterNode.connect(dest);
 		const rec = new MediaRecorder(dest.stream);
 		const chunks = [];
 		rec.ondataavailable = (e) => chunks.push(e.data);
 		const donePromise = new Promise((resolve, reject) => {
 			rec.onstop = async () => {
-				try { sonic.node.disconnect(dest); } catch (e) { /* ignore */ }
+				try { masterNode.disconnect(dest); } catch (e) { /* ignore */ }
 				try {
 					resolve(await recordedAudioToWav(new Blob(chunks, { type: rec.mimeType }), sonic.audioContext));
 				} catch (error) { reject(error); }
@@ -388,7 +472,7 @@ export function createEngine(sonic) {
 		});
 		try { rec.start(); }
 		catch (error) {
-			try { sonic.node.disconnect(dest); } catch (disconnectError) { /* ignore */ }
+			try { masterNode.disconnect(dest); } catch (disconnectError) { /* ignore */ }
 			throw error;
 		}
 		return { rec, donePromise };
@@ -402,10 +486,10 @@ export function createEngine(sonic) {
 	return {
 		bus, grp,
 		init, initFixedSynths,
-		defFor, noteOn, previewNote, noteOff, layerOff, setMaxVoices, setLayerFxBypass, layerOutBus, loadEngineFor,
+		defFor, noteOn, previewNote, noteOff, noteOffIfCurrent, layerOff, setMaxVoices, setLayerFxBypass, setLayerMixer, layerOutBus, loadEngineFor,
 		loadWave,
 		setSlotType, setSlotParam,
-		setRevShimParam, setMasterParam, setVol,
+		setRevShimParam, setMasterParam, setPumpParam, setPumpTarget, setPumpTempo, resetPumpBeat, setVol,
 		loadSampleFile, startLineInCapture, startMasterRecording,
 		loadGrainSampleFile, startGrainCapture,
 		setGrainSource(value) { stateGrainSource = value ? 1 : 0; layerOff(3); },

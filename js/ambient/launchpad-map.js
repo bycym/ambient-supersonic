@@ -138,6 +138,13 @@ export function createLaunchpadController({ state, actions, sequencer, engine, o
 
 	function handleNote(num, vel) {
 		if (vel === 0) { handleRelease(num); return; }
+		if (num >= 1 && num <= 8) {
+			if (state.padFocus === "eng" && state.padMode === 0 && state.layerSel === 3 && state.structure[3] === 10 && num <= 5) {
+				actions.setGlitchMode(3, num - 1);
+			}
+			scheduleRefresh();
+			return;
+		}
 		if (num >= 11 && num <= 88 && (num % 10) >= 1 && (num % 10) <= 8) {
 			const col = (num % 10) - 1;
 			const row = 7 - (Math.floor(num / 10) - 1);
@@ -280,7 +287,8 @@ export function createLaunchpadController({ state, actions, sequencer, engine, o
 					} else state.padScaleEdit = false;
 					break;
 				case 6:
-					keysOffMomentary(); state.padScaleEdit = false; state.padFocus = "eng"; state.padMode = 1;
+					if (shiftOn()) actions.showMixer();
+					else { keysOffMomentary(); state.padScaleEdit = false; state.padFocus = "eng"; state.padMode = 1; }
 					break;
 				case 7:
 					if (shiftOn()) {
@@ -410,13 +418,14 @@ export function createLaunchpadController({ state, actions, sequencer, engine, o
 		set(padTop(3), state.playing ? (blinkOn ? PAD_C.cPlayOn : PAD_C.cPlayDim) : PAD_C.cPlayOff);
 		set(padTop(4), shiftOn() ? PAD_C.cFill : (engFocus && state.padMode === 0 ? PAD_C.cModeOn : PAD_C.cModeOff));
 		set(padTop(5), state.padScaleEdit ? PAD_C.cStepSel : (keysMode ? PAD_C.cModeOn : PAD_C.cModeOff));
-		set(padTop(6), paramMode ? PAD_C.cModeOn : PAD_C.cModeOff);
+		set(padTop(6), shiftOn() ? PAD_C.cTip : (paramMode ? PAD_C.cModeOn : PAD_C.cModeOff));
 		set(padTop(7), state.padLatchMode[layer] ? PAD_C.cHoldOn : PAD_C.cHoldOff);
 
-		// bottom row: position bar
+		// bottom row: GLITCH PERC sound select, otherwise position bar
 		for (let col = 0; col < 8; col++) {
 			const seg = state.playing ? Math.max(0, Math.min(7, Math.floor((track.pos / Math.max(1, track.length)) * 8))) : -1;
-			set(padBottom(col), col === seg ? PAD_C.cPlayhead : PAD_C.cDim);
+			const glitchPicker = engFocus && state.padMode === 0 && layer === 3 && state.structure[layer] === 10;
+			set(padBottom(col), glitchPicker ? (col < 5 ? (col === state.lp[layer].mode ? PAD_C.cModeOn : PAD_C.cModeOff) : PAD_C.cOff) : (col === seg ? PAD_C.cPlayhead : PAD_C.cDim));
 		}
 	}
 

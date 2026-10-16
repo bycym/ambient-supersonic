@@ -5,9 +5,14 @@
 import {
 	LAYERS, STRUCTURES, NOISE_STRUCTURES, MOD_SHAPES, FILTER_NAMES, LFO_DESTS, WAVE_NAMES, NOISE_SRC_NAMES,
 	NOTE_NAMES, SCALE_NAMES, ROOT_NAMES, SCALES, SEQ_DIV_NAMES, activeEngineSpecs, GLITCH_PERC_MODES, SLOT_TYPE_NAMES, SLOT_SPECS,
-	REVSHIM_SPECS, MASTER_SPECS, warpValue, unwarpValue, midiFromNoteIndex, noteIndexFromMidi,
+	REVSHIM_SPECS, MASTER_SPECS, PUMP_SPECS, MASTER_FILTER_SPECS, warpValue, unwarpValue, midiFromNoteIndex, noteIndexFromMidi,
 } from "./data.js";
 import * as PatchMod from "./patch.js";
+import { STEMS, selectedStems } from "./stem-format.js";
+import { startStemExport } from "./stem-export.js";
+import { noteOffsets } from "./sequencer.js";
+import { stepShortcut } from "./shortcuts.js";
+import { COMPUTER_KEY_ROWS, createComputerKeyboard } from "./computer-keyboard.js";
 
 function el(tag, cls, text) {
 	const e = document.createElement(tag);
@@ -30,8 +35,12 @@ function fmtVal(v, unit) {
 	if (unit === "ct" || unit === "Hz") return Math.round(v) + unit;
 	return (Math.round(v * 100) / 100) + unit;
 }
+function pitchLabel(midi) {
+	if (midi >= 12 && midi <= 108) return NOTE_NAMES[midi - 12];
+	return `MIDI ${midi}`;
+}
 
-export function buildGui({ panel, state, actions, engine, sequencer, launchpad }) {
+export function buildGui({ panel, state, actions, engine, sequencer, launchpad, audioContext, stemSource }) {
 	panel.innerHTML = "";
 	const root = el("div", "az-root");
 	panel.appendChild(root);
@@ -56,8 +65,15 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	const tempoWrap = el("label", "az-field");
 	tempoWrap.appendChild(el("span", null, "tempo"));
 	const tempoInput = el("input");
-	tempoInput.type = "number"; tempoInput.min = 20; tempoInput.max = 400; tempoInput.step = 1;
-	tempoInput.addEventListener("input", () => actions.setTempo(parseFloat(tempoInput.value) || 120));
+	tempoInput.type = "text"; tempoInput.inputMode = "decimal";
+	const commitTempo = () => {
+		const raw = tempoInput.value.trim();
+		const bpm = raw && Number.isFinite(Number(raw)) ? Number(raw) : 60;
+		actions.setTempo(bpm);
+		tempoInput.value = state.tempoBpm;
+	};
+	tempoInput.addEventListener("blur", commitTempo);
+	tempoInput.addEventListener("keydown", (event) => { if (event.key === "Enter") { commitTempo(); tempoInput.blur(); } });
 	tempoWrap.appendChild(tempoInput);
 	top.appendChild(tempoWrap);
 
@@ -77,42 +93,8 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	polyWrap.appendChild(polyInput);
 	top.appendChild(polyWrap);
 
-	const recBtn = el("button", "az-btn az-rec-master", "REC WAV");
-	recBtn.title = "Record the master output as a WAV file";
-	let masterRec = null;
-	recBtn.addEventListener("click", async () => {
-		if (masterRec) {
-			const recording = masterRec;
-			masterRec = null;
-			recBtn.disabled = true;
-			recBtn.textContent = "SAVING WAV…";
-			try {
-				recording.rec.stop();
-				const blob = await recording.donePromise;
-				const a = document.createElement("a");
-				a.href = URL.createObjectURL(blob);
-				a.download = "ambient_zero_" + Date.now() + ".wav";
-				a.click();
-				setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-			} catch (error) {
-				alert("Could not save WAV recording: " + error.message);
-			} finally {
-				recBtn.disabled = false;
-				recBtn.classList.remove("active");
-				recBtn.textContent = "REC WAV";
-			}
-		} else {
-			try {
-				masterRec = engine.startMasterRecording();
-				if (!masterRec) throw new Error("Audio engine is not ready yet");
-				recBtn.classList.add("active");
-				recBtn.textContent = "● REC WAV";
-			} catch (error) {
-				alert("Could not start WAV recording: " + error.message);
-			}
-		}
-	});
-	top.appendChild(recBtn);
+	const recExportBtn = el("button", "az-btn az-rec-master", "REC WAV");
+	top.appendChild(recExportBtn);
 
 	const meterEl = el("div", "az-meter", "out: --");
 	top.appendChild(meterEl);
@@ -137,22 +119,160 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	});
 	top.appendChild(lpReconnect);
 
+	const pageNav = el("div", "az-tabs"); root.appendChild(pageNav);
+	const playPageBtn = el("button", "az-tab active", "LAYERS");
+	const mixerPageBtn = el("button", "az-tab", "MIXER");
+	const masterPageBtn = el("button", "az-tab", "MASTER");
+	const exportPageBtn = el("button", "az-tab", "EXPORT");
+	pageNav.append(playPageBtn, mixerPageBtn, masterPageBtn, exportPageBtn);
+	const playPage = el("div", "az-page"); root.appendChild(playPage);
+	const mixerPage = el("div", "az-panel az-mixer-page hidden"); root.appendChild(mixerPage);
+	const masterPage = el("div", "az-panel az-master-page hidden"); root.appendChild(masterPage);
+	const exportPage = el("div", "az-panel az-export-page hidden"); root.appendChild(exportPage);
+	function showPage(which) {
+		state.page = which;
+		playPage.classList.toggle("hidden", which !== "play");
+		mixerPage.classList.toggle("hidden", which !== "mixer");
+		exportPage.classList.toggle("hidden", which !== "export");
+		masterPage.classList.toggle("hidden", which !== "master");
+		playPageBtn.classList.toggle("active", which === "play");
+		mixerPageBtn.classList.toggle("active", which === "mixer");
+		exportPageBtn.classList.toggle("active", which === "export");
+		masterPageBtn.classList.toggle("active", which === "master");
+	}
+	playPageBtn.onclick = () => showPage("play"); mixerPageBtn.onclick = () => showPage("mixer"); exportPageBtn.onclick = () => showPage("export"); masterPageBtn.onclick = () => showPage("master");
+	mixerPage.appendChild(el("div", "az-panel-title", "MIXER"));
+	const mixerStrips = el("div", "az-mixer-strips"); mixerPage.appendChild(mixerStrips);
+	const mixerRefs = LAYERS.map((name, layer) => {
+		const strip = el("section", "az-mixer-strip");
+		strip.appendChild(el("h3", "az-mixer-heading", name));
+		const controls = {};
+		for (const [key, label, min, max, step] of [
+			["level", "LEVEL", 0, 2, 0.01], ["pan", "PAN", -1, 1, 0.01], ["send", "REVERB SEND", 0, 2, 0.01],
+		]) {
+			const wrap = el("label", "az-mixer-control");
+			const head = el("span", "az-mixer-control-head");
+			head.appendChild(el("span", null, label));
+			const readout = el("span", "az-mixer-readout"); head.appendChild(readout);
+			const input = el("input"); input.type = "range"; input.min = min; input.max = max; input.step = step;
+			input.setAttribute("aria-label", `${name} ${label.toLowerCase()}`);
+			input.addEventListener("input", () => actions.setMixerTrim(layer, key, Number(input.value)));
+			wrap.append(head, input); strip.appendChild(wrap);
+			controls[key] = { input, readout };
+		}
+		const mute = mkBtn("MUTE", "az-mixer-mute", () => actions.setMixerMute(layer, !state.muted[layer]));
+		mute.setAttribute("aria-label", `${name} mute`);
+		const route = mkBtn("THROUGH FX", "az-mixer-route", () => actions.setLayerFxBypass(layer, !state.layerFxBypass[layer]));
+		route.setAttribute("aria-label", `${name} FX route`);
+		strip.append(mute, route);
+		mixerStrips.appendChild(strip);
+		return { controls, mute, route };
+	});
+	const mixerMaster = el("section", "az-mixer-master"); mixerPage.appendChild(mixerMaster);
+	mixerMaster.appendChild(el("h3", "az-mixer-heading", "MASTER"));
+	const mixerMasterLevel = el("input");
+	mixerMasterLevel.type = "range"; mixerMasterLevel.min = 0; mixerMasterLevel.max = 1; mixerMasterLevel.step = 0.01;
+	mixerMasterLevel.setAttribute("aria-label", "Master level");
+	mixerMasterLevel.addEventListener("input", () => actions.setVol(Number(mixerMasterLevel.value)));
+	mixerMaster.appendChild(mixerMasterLevel);
+	const mixerMeter = el("div", "az-meter", "out: -inf dB"); mixerMaster.appendChild(mixerMeter);
+
+	const prefKey = "ambient_zero_export_preferences";
+	let prefs;
+	try { prefs = JSON.parse(localStorage.getItem(prefKey)) || {}; } catch { prefs = {}; }
+	prefs = { mode: "master", format: "float32", custom: [...STEMS], ...prefs };
+	if (!Array.isArray(prefs.custom)) prefs.custom = [...STEMS];
+	const savePrefs = () => localStorage.setItem(prefKey, JSON.stringify(prefs));
+	exportPage.appendChild(el("div", "az-panel-title", "AUDIO EXPORT"));
+	const modeRow = el("label", "az-field-row", "Mode"); exportPage.appendChild(modeRow);
+	const modeSel = el("select");
+	for (const [value, label] of [["master", "MASTER ONLY"], ["full", "FULL STEMS"], ["custom", "CUSTOM"]]) {
+		const opt = el("option", null, label); opt.value = value; modeSel.appendChild(opt);
+	}
+	modeSel.value = ["master", "full", "custom"].includes(prefs.mode) ? prefs.mode : "master";
+	modeRow.appendChild(modeSel);
+	const formatRow = el("label", "az-field-row", "WAV format"); exportPage.appendChild(formatRow);
+	const formatSel = el("select");
+	for (const [value, label] of [["float32", "32-bit float"], ["pcm24", "24-bit PCM"], ["pcm16", "16-bit PCM"]]) {
+		const opt = el("option", null, label); opt.value = value; formatSel.appendChild(opt);
+	}
+	formatSel.value = ["float32", "pcm24", "pcm16"].includes(prefs.format) ? prefs.format : "float32";
+	formatRow.appendChild(formatSel);
+	const customBox = el("div", "az-export-stems"); exportPage.appendChild(customBox);
+	const stemChecks = STEMS.map((name) => {
+		const label = el("label", "az-field-row"); const check = el("input"); check.type = "checkbox";
+		check.checked = prefs.custom.includes(name); label.append(check, document.createTextNode(name.toUpperCase()));
+		customBox.appendChild(label); check.onchange = () => { prefs.custom = STEMS.filter((n, i) => stemChecks[i].checked); savePrefs(); };
+		return check;
+	});
+	const exportHint = el("div", "az-export-hint"); exportPage.appendChild(exportHint);
+	exportPage.appendChild(el("div", "az-export-hint", "Use the recording button in the top bar to start or stop."));
+	const exportStatus = el("div", "az-export-status", "Ready to export"); exportPage.appendChild(exportStatus);
+	let exportController = null, exportBusy = false;
+	function refreshExportControls() {
+		prefs.mode = modeSel.value; prefs.format = formatSel.value;
+		const selected = prefs.mode === "custom" ? STEMS.filter((_, i) => stemChecks[i].checked) : selectedStems(prefs.mode);
+		customBox.classList.toggle("hidden", prefs.mode !== "custom");
+		const bytes = selected.length * audioContext.sampleRate * 600 * 2 * (prefs.format === "float32" ? 4 : prefs.format === "pcm24" ? 3 : 2);
+		exportHint.textContent = `${selected.length} stem(s) · up to ${(bytes / 1e9).toFixed(2)} GB for 10 minutes at ${audioContext.sampleRate} Hz. Stop after effect tails finish.`;
+		modeSel.disabled = formatSel.disabled = exportBusy;
+		stemChecks.forEach((check) => { check.disabled = exportBusy; });
+		recExportBtn.disabled = exportBusy || (!exportController && !selected.length);
+		recExportBtn.textContent = exportController ? "STOP REC" : exportBusy ? "SAVING…" : prefs.mode === "master" ? "REC WAV" : "REC STEMS";
+		recExportBtn.title = exportController ? "Stop and save the recording" : prefs.mode === "master" ? "Record the master output as a WAV file" : "Record the selected stems as a ZIP file";
+		recExportBtn.classList.toggle("active", !!exportController);
+	}
+	modeSel.onchange = () => { prefs.mode = modeSel.value; savePrefs(); refreshExportControls(); };
+	formatSel.onchange = () => { prefs.format = formatSel.value; savePrefs(); refreshExportControls(); };
+	stemChecks.forEach((check) => check.addEventListener("change", refreshExportControls));
+	async function toggleExport() {
+		if (exportBusy) return;
+		exportBusy = true; refreshExportControls();
+		try {
+			if (exportController) {
+				const controller = exportController; exportController = null;
+				exportStatus.textContent = "Saving export…"; await controller.stop();
+			} else {
+				const selected = selectedStems(prefs.mode, prefs.custom);
+				if (!window.showSaveFilePicker) throw new Error("Save As requires Chrome or Edge with the File System Access API");
+				const now = new Date().toISOString().replace(/[:.]/g, "-");
+				const isWav = prefs.mode === "master";
+				const handle = await window.showSaveFilePicker({ suggestedName: `ambient_zero_${now}.${isWav ? "wav" : "zip"}`,
+					types: [{ description: isWav ? "WAV audio" : "ZIP archive", accept: { [isWav ? "audio/wav" : "application/zip"]: [isWav ? ".wav" : ".zip"] } }] });
+				exportStatus.textContent = "Preparing recording…";
+				exportController = await startStemExport({ context: audioContext, source: stemSource, saveHandle: handle,
+					selected, format: prefs.format, onStatus: (message) => { exportStatus.textContent = message; },
+					onFinished: ({ frames, partial }) => { exportStatus.textContent = `${partial ? "Partial take" : "Saved"}: ${(frames / audioContext.sampleRate).toFixed(1)} seconds`; exportController = null; refreshExportControls(); } });
+				exportStatus.textContent = `Recording export… maximum ${(exportController.frameLimit / audioContext.sampleRate / 60).toFixed(1)} minutes`;
+			}
+		} catch (error) {
+			if (error.name !== "AbortError") {
+				exportStatus.textContent = "Export failed: " + error.message;
+				alert(exportStatus.textContent);
+			}
+		} finally { exportBusy = false; refreshExportControls(); }
+	}
+	recExportBtn.onclick = toggleExport;
+	refreshExportControls();
+
 	// ================= Patch panel =================
 	const patchBar = el("div", "az-patchbar");
-	root.appendChild(patchBar);
+	root.insertBefore(patchBar, pageNav);
 	const patchSelect = el("select", "az-patch-select");
 	patchBar.appendChild(patchSelect);
 	const nameField = el("input", "az-patch-name");
 	nameField.type = "text"; nameField.value = "untitled"; nameField.placeholder = "patch name";
 	patchBar.appendChild(nameField);
 
-	function refreshPatchList() {
+	function refreshPatchList(preferredName = patchSelect.value) {
+		const names = PatchMod.listPatches(PatchMod.NS);
 		patchSelect.innerHTML = "";
-		for (const name of PatchMod.listPatches(PatchMod.NS)) {
+		for (const name of names) {
 			const o = el("option", null, name);
 			o.value = name;
 			patchSelect.appendChild(o);
 		}
+		if (names.includes(preferredName)) patchSelect.value = preferredName;
 	}
 	refreshPatchList();
 
@@ -172,27 +292,35 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		state.currentPatchName = patchSelect.value;
 		nameField.value = patchSelect.value;
 	}));
+	function saveNamedPatch(name) {
+		const savedName = name.trim() || "untitled";
+		PatchMod.savePatch(PatchMod.NS, savedName, PatchMod.serializePatch(state));
+		state.currentPatchName = savedName;
+		nameField.value = savedName;
+		refreshPatchList(savedName);
+	}
 	patchBar.appendChild(mkBtn("SAVE", null, () => {
 		const name = state.currentPatchName && state.currentPatchName !== "untitled" ? state.currentPatchName : nameField.value || "untitled";
-		PatchMod.savePatch(PatchMod.NS, name, PatchMod.serializePatch(state));
-		state.currentPatchName = name;
-		refreshPatchList();
+		saveNamedPatch(name);
 	}));
 	patchBar.appendChild(mkBtn("SAVE AS", null, () => {
-		const name = nameField.value || "untitled";
-		PatchMod.savePatch(PatchMod.NS, name, PatchMod.serializePatch(state));
-		state.currentPatchName = name;
-		refreshPatchList();
+		saveNamedPatch(nameField.value);
 	}));
 	patchBar.appendChild(mkBtn("DELETE", "az-danger", () => {
-		PatchMod.deletePatch(PatchMod.NS, patchSelect.value);
+		const deletedName = patchSelect.value;
+		if (!deletedName) return;
+		PatchMod.deletePatch(PatchMod.NS, deletedName);
+		if (state.currentPatchName === deletedName) {
+			state.currentPatchName = null;
+			nameField.value = "untitled";
+		}
 		refreshPatchList();
 	}));
 	patchBar.appendChild(mkBtn("Export .azpatch", null, () => {
 		const blob = PatchMod.exportAzpatchBlob(PatchMod.serializePatch(state));
 		const a = document.createElement("a");
 		a.href = URL.createObjectURL(blob);
-		a.download = (state.currentPatchName || "untitled") + ".azpatch";
+		a.download = (state.currentPatchName || nameField.value.trim() || "untitled") + ".azpatch";
 		a.click();
 		setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 	}));
@@ -202,6 +330,9 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		if (!importInput.files[0]) return;
 		const data = await PatchMod.importAzpatchFile(importInput.files[0]);
 		await PatchMod.applyPatch(state, data, { engine, sequencer, refreshAll: refresh });
+		state.currentPatchName = null;
+		nameField.value = importInput.files[0].name.replace(/\.(azpatch|json)$/i, "") || "imported_patch";
+		patchSelect.selectedIndex = -1;
 	});
 	patchBar.appendChild(importInput);
 	patchBar.appendChild(mkBtn("Import .azpatch", null, () => importInput.click()));
@@ -216,8 +347,9 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		try {
 			const data = JSON.parse(await navigator.clipboard.readText());
 			await PatchMod.applyPatch(state, data, { engine, sequencer, refreshAll: refresh });
-			state.currentPatchName = "clipboard_patch";
-			nameField.value = state.currentPatchName;
+			state.currentPatchName = null;
+			nameField.value = "clipboard_patch";
+			patchSelect.selectedIndex = -1;
 		} catch (error) {
 			alert("Could not paste patch: " + error.message);
 		}
@@ -260,7 +392,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 
 	// ================= Layer tabs =================
 	const tabs = el("div", "az-tabs");
-	root.appendChild(tabs);
+	playPage.appendChild(tabs);
 	const tabBtns = [], muteBtns = [];
 	LAYERS.forEach((name, i) => {
 		const b = el("button", "az-tab", name);
@@ -279,13 +411,20 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 
 	// ================= Main body: param panel | sequencer =================
 	const body = el("div", "az-body");
-	root.appendChild(body);
+	playPage.appendChild(body);
 
 	// ---- Param panel ----
 	const paramPanel = el("div", "az-panel az-params");
 	body.appendChild(paramPanel);
+	const synthHeader = el("div", "az-synth-header");
+	paramPanel.appendChild(synthHeader);
+	synthHeader.appendChild(el("div", "az-eyebrow", "SOUND DESIGN / 01—04"));
 	const structLabel = el("div", "az-struct-label", "");
-	paramPanel.appendChild(structLabel);
+	synthHeader.appendChild(structLabel);
+	const editHint = el("div", "az-edit-hint", "Adjust layer sound here; arm REC and select a step to write locks");
+	synthHeader.appendChild(editHint);
+	const synthArmBtn = mkBtn("ARM STEP EDIT", "az-synth-arm", () => actions.toggleRecArm());
+	synthHeader.appendChild(synthArmBtn);
 	const layerFxRouteRow = el("div", "az-field-row az-layer-fx-route");
 	paramPanel.appendChild(layerFxRouteRow);
 	layerFxRouteRow.appendChild(el("strong", null, "LAYER FX ROUTE"));
@@ -367,7 +506,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	l2destWrap.appendChild(l2destSelect);
 	const extraControlWraps = [filterWrap, modShapeWrap, l1destWrap, l2destWrap];
 
-	const sliderGrid = el("div", "az-slider-grid");
+	const sliderGrid = el("div", "az-param-groups");
 	const glitchModeRow = el("div", "az-glitch-modes az-field-row");
 	glitchModeRow.appendChild(el("span", null, "hit"));
 	const glitchModeButtons = GLITCH_PERC_MODES.map((name, mode) => {
@@ -399,27 +538,83 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	paramPanel.appendChild(glitchModeRow);
 	paramPanel.appendChild(glitchBaseRow);
 	paramPanel.appendChild(glitchStepRndRow);
-	paramPanel.appendChild(sliderGrid);
+	const sourceField = el("section", "az-param-group az-source-field");
+	sourceField.appendChild(el("h3", "az-param-group-title", "SOURCE"));
+	const sourceControls = el("div", "az-param-controls");
+	sourceField.appendChild(sourceControls);
+	paramPanel.append(sourceField, sliderGrid);
+	const parameterGroups = {};
+	for (const name of ["TONE", "MODULATION", "ENVELOPE", "FILTER", "OUTPUT"]) {
+		const section = el("section", `az-param-group az-param-${name.toLowerCase()}`);
+		section.appendChild(el("h3", "az-param-group-title", name));
+		const controls = el("div", "az-param-controls");
+		const sliders = el("div", "az-knob-grid");
+		section.append(controls, sliders);
+		sliderGrid.appendChild(section);
+		parameterGroups[name] = { section, controls, sliders };
+	}
+	sourceControls.append(structSelectWrap, noiseStructWrap, sampleBtnWrap, grainControls, waveWrap,
+		glitchModeRow, glitchBaseRow, glitchStepRndRow);
+	parameterGroups.MODULATION.controls.append(modShapeWrap, l1destWrap, l2destWrap);
+	parameterGroups.FILTER.controls.append(filterWrap);
+	parameterGroups.OUTPUT.controls.append(layerFxRouteRow);
+	dropdownRow.remove();
 	let sliderRows = [];
 	let sliderSpecKey = "";
+	function groupForParameter(key) {
+		if (["atk", "dec", "sus", "rel", "attack", "decay", "sustain", "release"].includes(key)) return "ENVELOPE";
+		if (/^(l[12]|lfo|mod|pwmDepth|fmAmt|ringAmt)/i.test(key)) return "MODULATION";
+		if (/^(cut|res|egAmt|envToFilter|kbdTracking|tone|dCut|filter)/i.test(key)) return "FILTER";
+		if (/^(level|amp|pan|revSend|outLevel|noiseVol)/i.test(key)) return "OUTPUT";
+		return "TONE";
+	}
 	function rebuildLayerSliders(specs) {
-		sliderGrid.innerHTML = "";
+		Object.values(parameterGroups).forEach((group) => group.sliders.replaceChildren());
 		sliderRows = specs.filter((row) => row[0] !== "kMode").map((row) => {
 			const [id, key, name, lo, hi, def, unit, warp, integer] = row;
-			const rowEl = el("div", "az-slider-row");
-			rowEl.appendChild(el("span", "az-slider-label", name));
+			const rowEl = el("div", "az-knob-card");
+			const label = el("span", "az-knob-label", name);
+			rowEl.appendChild(label);
+			const dial = el("div", "az-knob-dial");
 			const range = el("input");
 			range.type = "range"; range.min = 0; range.max = 1; range.step = integer ? 1 / Math.max(1, hi - lo) : 0.001;
-			rowEl.appendChild(range);
-			const readout = el("span", "az-slider-val", "");
+			range.setAttribute("aria-label", name);
+			range.title = `Drag up or down to adjust ${name}; double-click to reset`;
+			dial.appendChild(range);
+			rowEl.appendChild(dial);
+			const readout = el("span", "az-knob-value", "");
 			rowEl.appendChild(readout);
-			range.addEventListener("input", () => {
-				let v = warpValue(lo, hi, parseFloat(range.value), warp);
+			const commit = (normal) => {
+				const n = Math.max(0, Math.min(1, normal));
+				range.value = n;
+				let v = warpValue(lo, hi, n, warp);
 				if (integer) v = Math.round(v);
 				actions.setLayerParam(state.layerSel, id, v);
+			};
+			range.addEventListener("input", () => {
+				if (!range.hasPointerCapture?.(pointerId)) commit(Number(range.value));
 			});
-			sliderGrid.appendChild(rowEl);
-			return { id, key, lo, hi, unit, warp, range, readout };
+			let pointerId = -1;
+			let startY = 0;
+			let startValue = 0;
+			range.addEventListener("pointerdown", (event) => {
+				if (range.disabled) return;
+				range.focus({ preventScroll: true });
+				pointerId = event.pointerId;
+				startY = event.clientY;
+				startValue = Number(range.value);
+				range.setPointerCapture(pointerId);
+				event.preventDefault();
+			});
+			range.addEventListener("pointermove", (event) => {
+				if (event.pointerId !== pointerId) return;
+				commit(startValue + (startY - event.clientY) / (event.shiftKey ? 600 : 180));
+			});
+			range.addEventListener("pointerup", () => { pointerId = -1; });
+			range.addEventListener("pointercancel", () => { pointerId = -1; });
+			range.addEventListener("dblclick", () => commit(unwarpValue(lo, hi, def, warp)));
+			parameterGroups[groupForParameter(key)].sliders.appendChild(rowEl);
+			return { id, key, lo, hi, unit, warp, range, readout, dial, rowEl };
 		});
 	}
 
@@ -445,9 +640,14 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	keysRow.appendChild(rootSelect);
 	const scaleSelect = selectEl(SCALE_NAMES, (v) => { state.keyScale = v; refreshKeySettings(); });
 	keysRow.appendChild(scaleSelect);
+	const setKeysOctave = (octave) => {
+		if (!Number.isFinite(octave)) return;
+		state.padKeyBase = (Math.max(-1, Math.min(7, Math.round(octave))) + 1) * 12;
+		refreshKeySettings();
+	};
 	const octInput = el("input");
 	octInput.type = "number"; octInput.min = -1; octInput.max = 7; octInput.step = 1;
-	octInput.addEventListener("input", () => { state.padKeyBase = (parseInt(octInput.value, 10) + 1) * 12; refreshKeySettings(); });
+	octInput.addEventListener("input", () => { if (octInput.value !== "") setKeysOctave(Number(octInput.value)); });
 	keysRow.appendChild(el("span", null, "oct"));
 	keysRow.appendChild(octInput);
 
@@ -469,8 +669,18 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	seqPanel.appendChild(seqBtnRow);
 	seqBtnRow.appendChild(mkBtn("RND", null, () => actions.randomizeTrack(state.layerSel)));
 	seqBtnRow.appendChild(mkBtn("DEL STEP", null, () => actions.delStep(state.layerSel)));
-	seqBtnRow.appendChild(mkBtn("CLR TRACK", "az-danger az-clrtrack", () => {
-		if (confirm("Clear the entire track?")) actions.clrTrack(state.layerSel);
+	const copyStep = async () => {
+		const json = actions.copySelectedStep(state.layerSel);
+		if (json) await navigator.clipboard.writeText(json);
+	};
+	const pasteStep = async () => {
+		try { actions.pasteSelectedStep(state.layerSel, await navigator.clipboard.readText()); }
+		catch (error) { alert(`Could not paste step: ${error.message}`); }
+	};
+	seqBtnRow.appendChild(mkBtn("COPY STEP", null, () => { copyStep().catch((error) => alert(`Could not copy step: ${error.message}`)); }));
+	seqBtnRow.appendChild(mkBtn("PASTE STEP", null, pasteStep));
+	seqBtnRow.appendChild(mkBtn("CLEAR ALL STEPS", "az-danger az-clrtrack", () => {
+		if (confirm("Clear all steps in the selected layer?")) actions.clrTrack(state.layerSel);
 	}));
 	const rndPanel = el("div", "az-rnd-settings");
 	seqPanel.appendChild(rndPanel);
@@ -518,7 +728,7 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	});
 
 	const grid = el("div", "az-grid");
-	seqPanel.appendChild(grid);
+	seqPanel.insertBefore(grid, seqBtnRow);
 	const stepBtns = [];
 	for (let i = 0; i < 64; i++) {
 		const b = el("button", "az-step");
@@ -542,6 +752,12 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	const gridScaleSelect = selectEl(SCALE_NAMES, (v) => { state.keyScale = v; refreshKeySettings(); });
 	const gridKeyLabel = el("strong", "az-key-label");
 	gridKeysWrap.append(gridKeyLabel, gridRootSelect, gridScaleSelect);
+	const gridOctDown = mkBtn("OCT −", null, () => setKeysOctave(state.padKeyBase / 12 - 2));
+	const gridOctLabel = el("span", "az-key-octave");
+	const gridOctUp = mkBtn("OCT +", null, () => setKeysOctave(state.padKeyBase / 12));
+	gridKeysWrap.append(gridOctDown, gridOctLabel, gridOctUp);
+	const computerKeyHint = el("div", "az-computer-key-hint");
+	gridView.appendChild(computerKeyHint);
 	const keyLatchBtn = mkBtn("LATCH OFF", "az-key-latch", () => {
 		const layer = state.layerSel;
 		state.padLatchMode[layer] = !state.padLatchMode[layer];
@@ -572,6 +788,9 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	gridView.appendChild(screenGrid);
 	const screenPads = [];
 	const screenHeld = new Map();
+	const computerKeyboard = createComputerKeyboard({ state, actions, sequencer, onChange: () => refresh() });
+	const computerPadLabels = new Map(COMPUTER_KEY_ROWS.flatMap((codes, row) =>
+		codes.map((code, col) => [(row + 5) * 8 + col, code === "Comma" ? "," : code.slice(3)])));
 	for (let idx = 0; idx < 64; idx++) {
 		const col = idx % 8, row = Math.floor(idx / 8);
 		const pad = el("button", "az-control-pad");
@@ -584,7 +803,8 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 					const v = warpValue(lo, hi, (7 - row) / 7, warp);
 					if (state.padFx === 3) actions.setRevShimParam(key, v); else actions.setSlotParam(state.padFx, key, v);
 				}
-			} else if (state.padMode === 0) actions.clickStep(layer, row * 8 + col);
+			} else if (state.padMode === 0 && layer === 3 && state.structure[layer] === 10 && row === 7 && col < 5) actions.setGlitchMode(layer, col);
+			else if (state.padMode === 0) actions.clickStep(layer, row * 8 + col);
 			else if (state.padMode === 1) {
 				const spec = activeEngineSpecs(layer, state.structure[layer])[state.padPage * 8 + col];
 				if (spec) {
@@ -643,6 +863,64 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 
 	const chordReadout = el("div", "az-chord", "(select a step)");
 	seqPanel.appendChild(chordReadout);
+	const noteEditor = el("div", "az-note-editor");
+	seqPanel.appendChild(noteEditor);
+	let renderedNoteLayer = -1, renderedNoteStep = -1;
+	function renderNoteEditor(track) {
+		if (renderedNoteLayer === state.layerSel && renderedNoteStep === track.selectedStep && noteEditor.contains(document.activeElement)) return;
+		renderedNoteLayer = state.layerSel;
+		renderedNoteStep = track.selectedStep;
+		noteEditor.replaceChildren();
+		const step = track.selectedStep == null ? null : track.steps[track.selectedStep];
+		if (!step) return;
+		const offsets = noteOffsets(step);
+		step.notes.forEach((pitch, index) => {
+			const row = el("div", "az-note-event");
+			const select = selectEl(NOTE_NAMES, (v) => actions.setStepNotePitch(state.layerSel, index, midiFromNoteIndex(v)), noteIndexFromMidi(pitch));
+			if (pitch < 12 || pitch > 108) {
+				const current = el("option", null, pitchLabel(pitch));
+				current.value = "-1"; current.disabled = true;
+				select.appendChild(current); select.value = "-1";
+			}
+			select.setAttribute("aria-label", `Note ${index + 1} pitch`);
+			select.disabled = !state.recArm || !step.on;
+			row.appendChild(select);
+			const drag = el("input");
+			drag.type = "range"; drag.min = -50; drag.max = 50; drag.step = 0.1;
+			drag.value = offsets[index] * 100;
+			drag.setAttribute("aria-label", `Note ${index + 1} timing drag`);
+			drag.disabled = !state.recArm || !step.on;
+			row.appendChild(drag);
+			const exact = el("input");
+			exact.type = "number"; exact.min = -50; exact.max = 50; exact.step = 0.1;
+			exact.value = (offsets[index] * 100).toFixed(1);
+			exact.setAttribute("aria-label", `Note ${index + 1} timing percent`);
+			exact.disabled = !state.recArm || !step.on;
+			drag.addEventListener("input", () => {
+				actions.setStepNoteOffset(state.layerSel, index, Number(drag.value) / 100, false);
+				exact.value = Number(drag.value).toFixed(1);
+			});
+			drag.addEventListener("change", refresh);
+			exact.addEventListener("change", () => actions.setStepNoteOffset(state.layerSel, index, Number(exact.value) / 100));
+			row.appendChild(exact);
+			row.appendChild(el("span", null, "%"));
+			const remove = mkBtn("REMOVE", null, () => actions.removeStepNote(state.layerSel, index));
+			remove.disabled = !state.recArm || !step.on;
+			row.appendChild(remove);
+			noteEditor.appendChild(row);
+		});
+		const addRow = el("div", "az-field-row");
+		const addPitch = selectEl(NOTE_NAMES, () => {}, noteIndexFromMidi(state.seqNote[state.layerSel] ?? 60));
+		addPitch.setAttribute("aria-label", "Pitch to add");
+		addRow.appendChild(addPitch);
+		const add = mkBtn("ADD NOTE", null, () => actions.addStepNote(state.layerSel, midiFromNoteIndex(Number(addPitch.value))));
+		add.disabled = !state.recArm || !step.on;
+		addRow.appendChild(add);
+		noteEditor.appendChild(addRow);
+	}
+	noteEditor.addEventListener("focusout", () => queueMicrotask(() => {
+		if (!noteEditor.contains(document.activeElement)) renderNoteEditor(state.seq[state.layerSel]);
+	}));
 	const retriggerRow = el("div", "az-field-row az-retrigger");
 	seqPanel.appendChild(retriggerRow);
 	retriggerRow.appendChild(el("span", null, "Retrigger (extra hits)"));
@@ -692,11 +970,10 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	lockBtnRow.appendChild(mkBtn("CLR LOCK", null, () => actions.clrLock(state.layerSel, state.lockSpecId)));
 	const lockStatus = el("div", "az-lock-status", "(select a step)");
 	lockPanel.appendChild(lockStatus);
-	const sequencerOnly = [keysRow, noteRow, seqBtnRow, rndPanel, grid, chordReadout, retriggerRow, lockPanel];
+	const sequencerOnly = [keysRow, noteRow, seqBtnRow, rndPanel, grid, chordReadout, noteEditor, retriggerRow, lockPanel];
 
 	// ================= FX chain =================
 	const fxChain = el("div", "az-panel az-fxchain");
-	root.appendChild(fxChain);
 	fxChain.appendChild(el("div", "az-panel-title", "FX CHAIN"));
 	const fxRow = el("div", "az-fx-row");
 	fxChain.appendChild(fxRow);
@@ -750,7 +1027,6 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 
 	// ---- fixed boxes ----
 	const fixedRow = el("div", "az-fixed-row");
-	root.appendChild(fixedRow);
 	function mkFixedBox(title, specs, getParams, setParam, toggleActive) {
 		const box = el("div", "az-fxbox");
 		box.appendChild(el("div", "az-panel-title", title));
@@ -786,12 +1062,62 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 	const revShimBox = mkFixedBox("REVERB + SHIMMER", REVSHIM_SPECS, () => state.revShimParams, (k, v) => actions.setRevShimParam(k, v), () => actions.toggleRevShimActive());
 	const masterBox = mkFixedBox("MASTER (comp+lim)", MASTER_SPECS, () => state.masterParams, (k, v) => actions.setMasterParam(k, v), () => actions.toggleMasterActive());
 	fixedRow.appendChild(revShimBox.box);
-	fixedRow.appendChild(masterBox.box);
-	fixedRow.appendChild(meterEl);
+	masterPage.append(fxChain, fixedRow);
+	masterPage.appendChild(el("div", "az-panel-title", "MASTER PROCESSING"));
+	const masterGrid = el("div", "az-master-grid"); masterPage.appendChild(masterGrid);
+	const pumpBox = el("section", "az-fxbox"); masterGrid.appendChild(pumpBox);
+	pumpBox.appendChild(el("h3", "az-panel-title", "SIDECHAIN PUMP"));
+	const pumpActive = mkBtn("BYP", null, () => actions.setPumpParam("active", state.pumpParams.active ? 0 : 1));
+	pumpBox.appendChild(pumpActive);
+	function pumpSelect(label, options, key) {
+		const row = el("label", "az-field-row az-master-select");
+		row.appendChild(el("span", null, label));
+		const select = selectEl(options, (value) => actions.setPumpParam(key, value));
+		row.appendChild(select); pumpBox.appendChild(row);
+		return select;
+	}
+	const pumpMode = pumpSelect("MODE", ["AUDIO LAYER", "TEMPO"], "mode");
+	const pumpSource = pumpSelect("SOURCE", LAYERS, "source");
+	const pumpRate = pumpSelect("BEAT RATE", ["½ / BEAT", "1 / BEAT", "2 / BEAT"], "rate");
+	pumpBox.appendChild(el("div", "az-field-label", "DUCK TARGETS"));
+	const targetRow = el("div", "az-master-targets"); pumpBox.appendChild(targetRow);
+	const targetBtns = LAYERS.map((label, i) => {
+		const button = mkBtn(label, null, () => actions.setPumpTarget(i, !state.pumpParams.targets[i]));
+		button.setAttribute("aria-pressed", "false");
+		targetRow.appendChild(button);
+		return button;
+	});
+	const pumpSliders = PUMP_SPECS.map(([label, key, lo, hi, , warp]) => {
+		const row = el("label", "az-slider-row"); pumpBox.appendChild(row);
+		row.appendChild(el("span", "az-slider-label", label));
+		const range = el("input"); range.type = "range"; range.min = 0; range.max = 1; range.step = 0.001;
+		row.appendChild(range);
+		const readout = el("span", "az-slider-val", ""); row.appendChild(readout);
+		range.addEventListener("input", () => actions.setPumpParam(key, warpValue(lo, hi, Number(range.value), warp)));
+		return { key, lo, hi, warp, range, readout };
+	});
+	masterGrid.appendChild(masterBox.box);
+	const filterBox = el("section", "az-fxbox"); masterGrid.appendChild(filterBox);
+	filterBox.appendChild(el("h3", "az-panel-title", "MASTER FILTERS"));
+	const filterControls = MASTER_FILTER_SPECS.map(([label, activeKey, freqKey, lo, hi]) => {
+		const header = el("div", "az-field-row"); filterBox.appendChild(header);
+		header.appendChild(el("span", null, label));
+		const button = mkBtn("BYP", null, () => actions.setMasterParam(activeKey, state.masterParams[activeKey] ? 0 : 1));
+		header.appendChild(button);
+		const row = el("label", "az-slider-row"); filterBox.appendChild(row);
+		row.appendChild(el("span", "az-slider-label", "CUTOFF"));
+		const range = el("input"); range.type = "range"; range.min = 0; range.max = 1; range.step = 0.001;
+		row.appendChild(range);
+		const readout = el("span", "az-slider-val", ""); row.appendChild(readout);
+		range.addEventListener("input", () => actions.setMasterParam(freqKey, warpValue(lo, hi, Number(range.value), true)));
+		return { activeKey, freqKey, lo, hi, button, range, readout };
+	});
+	masterPage.appendChild(meterEl);
 
 	// ================= refresh =================
 
 	function refresh() {
+		showPage(state.page || "play");
 		const isLaunchpadView = state.controlView === 1;
 		viewButtons.forEach((button, i) => {
 			button.classList.toggle("active", i === state.controlView);
@@ -801,6 +1127,18 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		gridView.classList.toggle("hidden", !isLaunchpadView);
 		tabBtns.forEach((b, i) => b.classList.toggle("active", i === state.layerSel));
 		muteBtns.forEach((b, i) => b.classList.toggle("active", state.muted[i]));
+		mixerRefs.forEach(({ controls, mute, route }, i) => {
+			for (const [key, property] of [["level", "mixerLevel"], ["pan", "mixerPan"], ["send", "mixerSend"]]) {
+				controls[key].input.value = state[property][i];
+				controls[key].readout.textContent = state[property][i].toFixed(2);
+			}
+			mute.classList.toggle("active", state.muted[i]);
+			mute.setAttribute("aria-pressed", String(state.muted[i]));
+			route.textContent = state.layerFxBypass[i] ? "BYPASS FX" : "THROUGH FX";
+			route.classList.toggle("active", state.layerFxBypass[i]);
+			route.setAttribute("aria-pressed", String(state.layerFxBypass[i]));
+		});
+		mixerMasterLevel.value = state.vol;
 
 		const layer = state.layerSel;
 		const track = state.seq[layer];
@@ -837,6 +1175,11 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		extraControlWraps.forEach((wrap) => wrap.classList.toggle("hidden", !isNoise && !isTonal || (isTonal && state.structure[layer] === 6)));
 
 		waveWrap.classList.toggle("hidden", !(isTonal || isNoise || isGrain));
+		for (const group of Object.values(parameterGroups)) {
+			const hasVisibleControls = [...group.controls.children].some((control) => !control.classList.contains("hidden"));
+			group.controls.classList.toggle("hidden", !hasVisibleControls);
+			group.section.classList.toggle("hidden", !hasVisibleControls && group.sliders.childElementCount === 0);
+		}
 		waveWrap.querySelector("span").textContent = isTonal ? "wave" : isNoise ? "source" : "grain source";
 		const mode = isTonal ? "wave" : isNoise ? "noise" : "grain";
 		const waveOptions = isTonal ? WAVE_NAMES : isNoise ? NOISE_SRC_NAMES : ["LINE IN", "WAV FILE"];
@@ -872,6 +1215,14 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		gridRootSelect.value = state.keyRoot;
 		gridScaleSelect.value = state.keyScale;
 		gridKeyLabel.textContent = ROOT_NAMES[state.keyRoot] + " " + SCALE_NAMES[state.keyScale];
+		const keysOctave = Math.round(state.padKeyBase / 12) - 1;
+		gridOctLabel.textContent = "OCT " + keysOctave;
+		gridOctDown.disabled = keysOctave <= -1;
+		gridOctUp.disabled = keysOctave >= 7;
+		computerKeyHint.classList.toggle("hidden", state.padFocus !== "eng" || state.padMode !== 2);
+		computerKeyHint.textContent = computerKeyboard.capsLockOn
+			? "Caps Lock ON · Q–I / A–K / Z–, play notes"
+			: "Turn on Caps Lock to play Q–I / A–K / Z–, on your keyboard";
 		keyLatchBtn.classList.toggle("active", !!state.padLatchMode[layer]);
 		keyLatchBtn.textContent = state.padLatchMode[layer] ? "LATCH ON" : "LATCH OFF";
 		keyLatchBtn.setAttribute("aria-pressed", String(!!state.padLatchMode[layer]));
@@ -896,6 +1247,10 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 				const specs = state.padFx === 3 ? REVSHIM_SPECS : SLOT_SPECS[state.slotType[state.padFx]];
 				const spec = specs[col];
 				if (spec) { const value = state.padFx === 3 ? state.revShimParams[spec[1]] : state.slotParams[state.padFx][spec[1]]; const level = Math.round(unwarpValue(spec[2], spec[3], value, spec[5]) * 7); pad.classList.toggle("on", 7 - row <= level); pad.title = spec[0]; }
+			} else if (state.padMode === 0 && layer === 3 && state.structure[layer] === 10 && row === 7 && col < 5) {
+				pad.textContent = ["KICK", "SNARE", "HAT", "CLAP", "PERC"][col];
+				pad.classList.toggle("on", state.lp[layer].mode === col);
+				pad.title = "GLITCH PERC: " + pad.textContent;
 			} else if (state.padMode === 0) {
 				const idx = row * 8 + col, step = track.steps[idx];
 				pad.textContent = String(idx + 1);
@@ -913,13 +1268,14 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 				const pitchClass = ((pitch % 12) + 12) % 12;
 				const octave = Math.floor(pitch / 12) - 1;
 				const latched = state.padLatched.some((held) => held.layer === layer && held.pitch === pitch);
-				const held = [...screenHeld.values()].some((entry) => entry.layer === layer && entry.pitch === pitch);
-				pad.textContent = pitch <= 127 ? ROOT_NAMES[pitchClass] + octave : "";
+				const held = [...screenHeld.values(), ...computerKeyboard.held.values()].some((entry) => entry.layer === layer && entry.pitch === pitch);
+				const keyboardLabel = computerPadLabels.get(i);
+				pad.textContent = pitch <= 127 ? (keyboardLabel ? keyboardLabel + "\n" : "") + ROOT_NAMES[pitchClass] + octave : "";
 				pad.classList.add("az-key-pad", "az-octave-" + ((octave + 1) % 7));
 				pad.classList.toggle("root-note", degree % scale.length === 0);
 				pad.classList.toggle("latched", latched);
 				pad.classList.toggle("held", held);
-				pad.title = pitch <= 127 ? `${ROOT_NAMES[state.keyRoot]} ${SCALE_NAMES[state.keyScale]} · degree ${(degree % scale.length) + 1} · ${ROOT_NAMES[pitchClass]}${octave}` : "Out of MIDI range";
+				pad.title = pitch <= 127 ? `${keyboardLabel ? keyboardLabel + " · " : ""}${ROOT_NAMES[state.keyRoot]} ${SCALE_NAMES[state.keyScale]} · degree ${(degree % scale.length) + 1} · ${ROOT_NAMES[pitchClass]}${octave}` : "Out of MIDI range";
 				pad.disabled = pitch > 127;
 			}
 		}
@@ -928,19 +1284,23 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		if (!activeSpecs.some((row) => row[0] === state.lockSpecId)) state.lockSpecId = activeSpecs[0][0];
 		lockParamSelect.value = activeSpecs.findIndex((row) => row[0] === state.lockSpecId);
 		for (const s of sliderRows) {
-			s.range.disabled = !state.recArm || track.selectedStep == null;
 			const locked = track.selectedStep != null && track.steps[track.selectedStep].locks[s.id] !== undefined;
-			const v = locked ? track.steps[track.selectedStep].locks[s.id] : lp[s.key];
-			s.range.value = unwarpValue(s.lo, s.hi, v, s.warp);
-			s.readout.textContent = fmtVal(v, s.unit) + (locked ? " •L" : "");
+			const showLock = state.recArm && locked;
+			const v = showLock ? track.steps[track.selectedStep].locks[s.id] : lp[s.key];
+			const normalized = Math.max(0, Math.min(1, unwarpValue(s.lo, s.hi, v, s.warp)));
+			s.range.value = normalized;
+			s.dial.style.setProperty("--progress", `${normalized * 270}deg`);
+			s.dial.style.setProperty("--angle", `${-135 + normalized * 270}deg`);
+			s.readout.textContent = fmtVal(v, s.unit) + (showLock ? " •L" : "");
+			s.rowEl.classList.toggle("az-knob-locked", showLock);
 		}
+		const canEditSound = state.recArm && track.selectedStep != null;
+		editHint.textContent = canEditSound ? `Editing step ${track.selectedStep + 1} · changes saved as parameter locks` : "Adjust layer sound here; arm REC and select a step to write locks";
+		synthArmBtn.classList.toggle("active", state.recArm);
+		synthArmBtn.setAttribute("aria-pressed", String(state.recArm));
+		synthArmBtn.textContent = state.recArm ? "STEP EDIT ARMED" : "ARM STEP EDIT";
 		noteSelect.disabled = !state.recArm;
-		for (const control of extraControlWraps) {
-			const select = control.querySelector("select");
-			if (select) select.disabled = !state.recArm || track.selectedStep == null;
-		}
-
-		tempoInput.value = state.tempoBpm;
+		if (document.activeElement !== tempoInput) tempoInput.value = state.tempoBpm;
 		volInput.value = state.vol;
 		polyInput.value = state.maxVoices;
 		playBtn.textContent = state.playing ? "STOP" : "PLAY";
@@ -975,13 +1335,14 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		}
 		if (track.selectedStep != null) {
 			const st = track.steps[track.selectedStep];
-			chordReadout.textContent = "notes: " + st.notes.map((n) => NOTE_NAMES[noteIndexFromMidi(n)]).join(",") + `  vel:${st.vel.toFixed(2)}  len:${st.len.toFixed(2)}  retrig:${st.retrigger ?? 0}`;
+			chordReadout.textContent = "notes: " + st.notes.map((n, i) => `${pitchLabel(n)} ${((noteOffsets(st)[i] ?? 0) * 100).toFixed(1)}%`).join(", ") + `  vel:${st.vel.toFixed(2)}  len:${st.len.toFixed(2)}  retrig:${st.retrigger ?? 0}`;
 			const lockNames = Object.keys(st.locks).map((id) => activeSpecs.find((s) => s[0] === id)?.[2] || id);
 			lockStatus.textContent = lockNames.length ? "locks: " + lockNames.join(", ") : "no locks on this step";
 		} else {
 			chordReadout.textContent = "(select a step)";
 			lockStatus.textContent = "(select a step)";
 		}
+		renderNoteEditor(track);
 		const canEditRetrigger = state.recArm && track.selectedStep != null && track.steps[track.selectedStep].on;
 		if (document.activeElement !== retriggerInput) retriggerInput.value = track.selectedStep != null ? track.steps[track.selectedStep].retrigger ?? 0 : 0;
 		retriggerInput.disabled = !canEditRetrigger;
@@ -998,11 +1359,55 @@ export function buildGui({ panel, state, actions, engine, sequencer, launchpad }
 		slotBoxes.forEach((b) => b.refresh());
 		revShimBox.refresh();
 		masterBox.refresh();
+		pumpActive.textContent = state.pumpParams.active ? "ON" : "BYP";
+		pumpActive.classList.toggle("active", !!state.pumpParams.active);
+		pumpActive.setAttribute("aria-pressed", String(!!state.pumpParams.active));
+		pumpMode.value = state.pumpParams.mode;
+		pumpSource.value = state.pumpParams.source;
+		pumpRate.value = state.pumpParams.rate;
+		targetBtns.forEach((button, i) => {
+			button.classList.toggle("active", !!state.pumpParams.targets[i]);
+			button.setAttribute("aria-pressed", String(!!state.pumpParams.targets[i]));
+		});
+		for (const s of pumpSliders) {
+			const value = state.pumpParams[s.key];
+			s.range.value = unwarpValue(s.lo, s.hi, value, s.warp);
+			s.readout.textContent = (s.key === "attack" || s.key === "release") ? value.toFixed(3) : fmtVal(value, "");
+		}
+		for (const c of filterControls) {
+			const value = state.masterParams[c.freqKey];
+			const active = !!state.masterParams[c.activeKey];
+			c.button.textContent = active ? "ON" : "BYP";
+			c.button.classList.toggle("active", active);
+			c.button.setAttribute("aria-pressed", String(active));
+			c.range.value = unwarpValue(c.lo, c.hi, value, true);
+			c.readout.textContent = fmtVal(value, "Hz");
+		}
 
 		lpStatus.textContent = "Launchpad: " + (launchpad && launchpad.connected ? "connected" : "not connected");
 		lpReconnect.textContent = launchpad && launchpad.connected ? "RECONNECT" : "CONNECT MIDI";
 	}
 
+	const onShortcut = (event) => {
+		if (computerKeyboard.keyDown(event)) return;
+		const command = stepShortcut(event);
+		if (!command) return;
+		event.preventDefault();
+		if (command === "copy") copyStep().catch((error) => alert(`Could not copy step: ${error.message}`));
+		if (command === "paste") pasteStep();
+		if (command === "play") actions.playToggle();
+		if (command === "delete") actions.delStep(state.layerSel);
+	};
+	const onKeyboardKeyUp = (event) => computerKeyboard.keyUp(event);
+	const onWindowBlur = () => computerKeyboard.releaseAll();
+	document.addEventListener("keydown", onShortcut);
+	document.addEventListener("keyup", onKeyboardKeyUp);
+	window.addEventListener("blur", onWindowBlur);
 	refresh();
-	return { refresh, meterEl, refreshPatchList };
+	return { refresh, meterEl, meterEls: [meterEl, mixerMeter], refreshPatchList, stopExport: () => exportController?.stop(), dispose: () => {
+		computerKeyboard.releaseAll();
+		document.removeEventListener("keydown", onShortcut);
+		document.removeEventListener("keyup", onKeyboardKeyUp);
+		window.removeEventListener("blur", onWindowBlur);
+	} };
 }

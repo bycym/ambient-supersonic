@@ -1,26 +1,49 @@
-# SuperSonic WebPort Project
+# Ambient Zero WebPort
 
-The public-facing production host for the Ambient SuperSonic web environment. 
+A browser version of Ambient Zero powered by SuperSonic's WebAssembly
+SuperCollider server. The webport includes the Ambient Zero app, its compiled
+SynthDefs, and the SuperSonic runtime. Granular Zero is not part of this app.
 
-This repository serves as a static target deployment site. It utilizes a WebAssembly port of **`scsynth`** (SuperCollider’s real-time synthesis engine) to compile and evaluate audio directly inside modern web browsers.
-
-
-<img width="1157" height="798" alt="kép" src="https://github.com/user-attachments/assets/1f310c2e-5326-4323-80bf-1ba0c80d307b" />
-
-<img width="2320" height="2998" alt="kép" src="https://github.com/user-attachments/assets/d1560d6e-c635-4ba3-8e65-53091926fb2f" />
 
 ## Running the Server
 
-You can launch a local static file server immediately without a permanent installation using `npx`:
+From this directory, install dependencies once, then start
+the static server with the response headers required by SuperSonic:
 
 ```bash
-npx serve .
+npm install
+npm start
 ```
 
-Alternatively, if you run `npm install` first, you can use the configured package script shortcut:
+Once running, navigate to the local address provided in your terminal (usually `http://localhost:3000`) to test your audio implementation.
+
+## Tests
 
 ```bash
-npm start
+npm test
+```
+
+## To build
+
+Run the build command from the repository root:
+
+```shell
+/Applications/SuperCollider.app/Contents/MacOS/sclang ./supercollider_standalone/webport/compile/ambient/compile_ambient.scd
+```
+
+
+## Deployment
+
+The repository's deployment workflow publishes this directory to the `main`
+branch of `bycym/ambient-supersonic` for GitHub Pages.
+It adds the cross-origin isolation service worker before publishing so the
+WebAssembly audio runtime can use `SharedArrayBuffer`.
+
+```text
+[ source repository ]
+        │ GitHub Actions
+        ▼
+[ ambient-supersonic main branch / GitHub Pages ]
 ```
 
 ## License

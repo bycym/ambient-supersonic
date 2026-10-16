@@ -34,15 +34,25 @@ function ensureCss() {
 }
 
 export async function mount(panel, gate, audioContext) {
+	let sonic = null;
+	let mountedTeardown = null;
+	try {
 	ensureCss();
 
-	const sonic = await bootEngine({ synthdefDir: "ambient", audioContext });
-	const engine = createEngine(sonic);
+	sonic = await bootEngine({ synthdefDir: "ambient", audioContext,
+		scsynthOptions: { numOutputBusChannels: 18 }, autoConnect: false });
+	const splitter = sonic.audioContext.createChannelSplitter(18);
+	const masterNode = sonic.audioContext.createChannelMerger(2);
+	sonic.node.connect(splitter);
+	splitter.connect(masterNode, 0, 0);
+	splitter.connect(masterNode, 1, 1);
+	masterNode.connect(sonic.audioContext.destination);
+	const engine = createEngine(sonic, { outputChannels: 18, masterNode });
 	await engine.init();
 
 	const state = createState();
 
-	await engine.initFixedSynths({ revShim: state.revShimParams, master: state.masterParams });
+	await engine.initFixedSynths({ revShim: state.revShimParams, master: state.masterParams, pump: state.pumpParams, bpm: state.tempoBpm });
 	engine.setMaxVoices(state.maxVoices);
 	for (let i = 0; i < 3; i++) {
 		await engine.setSlotType(i, state.slotType[i]);
@@ -75,7 +85,7 @@ export async function mount(panel, gate, audioContext) {
 
 	launchpad = createLaunchpadController({ state, actions, sequencer, engine, onConnectionChange: () => gui && gui.refresh() });
 
-	gui = buildGui({ panel, state, actions, engine, sequencer, launchpad });
+	gui = buildGui({ panel, state, actions, engine, sequencer, launchpad, audioContext: sonic.audioContext, stemSource: sonic.node });
 
 	if (gate && gate.parentNode) gate.remove();
 
@@ -98,7 +108,7 @@ export async function mount(panel, gate, audioContext) {
 		try {
 			const analyser = sonic.audioContext.createAnalyser();
 			analyser.fftSize = 1024;
-			sonic.node.connect(analyser);
+			masterNode.connect(analyser);
 			const buf = new Float32Array(analyser.fftSize);
 			meterTimer = setInterval(() => {
 				analyser.getFloatTimeDomainData(buf);
@@ -106,7 +116,7 @@ export async function mount(panel, gate, audioContext) {
 				for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
 				const rms = Math.sqrt(sum / buf.length);
 				const db = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
-				gui.meterEl.textContent = "out: " + (isFinite(db) ? db.toFixed(1) : "-inf") + " dB";
+				for (const meter of gui.meterEls || [gui.meterEl]) meter.textContent = "out: " + (isFinite(db) ? db.toFixed(1) : "-inf") + " dB";
 			}, 150);
 		} catch (err) {
 			console.warn("Meter analyser setup failed:", err);
@@ -114,14 +124,24 @@ export async function mount(panel, gate, audioContext) {
 	}
 
 	async function teardown() {
+		gui?.dispose?.();
+		if (gui?.stopExport) await gui.stopExport();
 		if (meterTimer) clearInterval(meterTimer);
 		sequencer.stop();
 		sequencer.setMetronome(false);
 		await launchpad.disconnect().catch(() => {});
 		engine.teardown();
+		masterNode.disconnect();
+		sonic.node.disconnect(splitter);
 		await teardownEngine(sonic);
 	}
+	mountedTeardown = teardown;
 
 	window.__ambientApp = { state, engine, actions, sequencer, launchpad, gui, teardown };
 	return { state, engine, actions, sequencer, launchpad, gui, teardown };
+	} catch (err) {
+		if (mountedTeardown) await mountedTeardown().catch(() => {});
+		else if (sonic) await teardownEngine(sonic);
+		throw err;
+	}
 }

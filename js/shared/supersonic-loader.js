@@ -1,22 +1,19 @@
-// Boots a SuperSonic (WASM scsynth) instance from the vendored assets in
-// webport/vendor/, and loads a set of .scsyndef files for one instrument.
-// Used by both the ambient and granular apps so each tab can boot (and
-// later tear down) its own independent engine instance.
+// Boots the Ambient Zero SuperSonic (WASM scsynth) instance from the vendored
+// assets and its compiled SynthDefs.
 
 import { SuperSonic } from "../../vendor/supersonic/dist/supersonic.js";
 
 const ASSET_ROOT = new URL("../../vendor/", import.meta.url).href;
+const WEBPORT_ROOT = new URL("../../", import.meta.url);
 
-export async function bootEngine({ synthdefDir, scsynthOptions, audioContext } = {}) {
-	// Passing an already-created (and already-resumed) AudioContext matters:
-	// it must be constructed synchronously inside the user's click handler
-	// (see index.html's makeResumedAudioContext()) or the browser's autoplay
-	// gesture window can expire before SuperSonic gets around to resuming its
-	// own internally-created context, leaving audio permanently silent.
+export async function bootEngine({ synthdefDir, scsynthOptions, audioContext, autoConnect = true } = {}) {
+	// AudioContext must be created synchronously in the Start button's click
+	// handler so browser autoplay policies retain the user gesture.
 	const sonic = new SuperSonic({
 		baseURL: ASSET_ROOT + "supersonic/dist/",
 		coreBaseURL: ASSET_ROOT + "supersonic-core/",
 		audioContext,
+		autoConnect,
 		scsynthOptions: Object.assign(
 			{
 				numInputBusChannels: 2,
@@ -31,23 +28,31 @@ export async function bootEngine({ synthdefDir, scsynthOptions, audioContext } =
 		),
 	});
 
-	// Belt-and-suspenders: re-resume right before init() in case the
-	// context got suspended again between the click and here (observed in
-	// some browsers when several `await`s separate creation from use).
-	if (sonic.audioContext && sonic.audioContext.state !== "running") {
-		await sonic.audioContext.resume().catch(() => {});
-	}
-	await sonic.init();
+	try {
+		if (sonic.audioContext && sonic.audioContext.state !== "running") {
+			await sonic.audioContext.resume().catch(() => {});
+		}
+		await sonic.init();
 
-	if (synthdefDir) {
-		const dirUrl = ASSET_ROOT.replace(/vendor\/$/, "") + "synthdefs/" + synthdefDir + "/";
-		const names = await fetch(dirUrl + "manifest.json").then((r) => r.json());
-		await Promise.all(
-			names.map((name) => sonic.loadSynthDef(dirUrl + name + ".scsyndef")),
-		);
-	}
+		if (synthdefDir) {
+			const dirUrl = new URL(`synthdefs/${synthdefDir}/`, WEBPORT_ROOT);
+			const manifestUrl = new URL("manifest.json", dirUrl);
+			const response = await fetch(manifestUrl);
+			if (!response.ok) throw new Error(`Failed to load SynthDef manifest (${response.status}): ${manifestUrl}`);
+			const names = await response.json();
+			if (!Array.isArray(names) || names.some((name) => typeof name !== "string" || !/^[\w-]+$/.test(name))) {
+				throw new Error(`Invalid SynthDef manifest: ${manifestUrl}`);
+			}
+			await Promise.all(
+				names.map((name) => sonic.loadSynthDef(new URL(`${name}.scsyndef`, dirUrl).href)),
+			);
+		}
 
-	return sonic;
+		return sonic;
+	} catch (err) {
+		await sonic.destroy().catch(() => {});
+		throw err;
+	}
 }
 
 export async function teardownEngine(sonic) {

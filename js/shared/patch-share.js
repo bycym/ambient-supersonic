@@ -1,4 +1,4 @@
-// Patch persistence shared by both instruments:
+// Patch persistence used by the Ambient Zero app:
 //   - localStorage save/load (named patches, per-instrument namespace)
 //   - .azpatch-compatible JSON export/import (round-trips with the desktop
 //     SuperCollider script's own save/load format where that instrument has one)
@@ -6,7 +6,7 @@
 //     so a patch made on desktop can be scanned open on a phone against the
 //     same page hosted on GitHub Pages.
 //
-// `ns` namespaces localStorage keys per instrument ("ambient" | "granular").
+// `ns` identifies the instrument namespace used for localStorage keys.
 
 import qrcode from "../../vendor/qrcode/qrcode.mjs";
 

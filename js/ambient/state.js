@@ -1,6 +1,14 @@
 import { defaultLayerParams, slotDefaults, GLITCH_PERC_BASE_DEFAULTS } from "./data.js";
 import { newTrack } from "./sequencer.js";
 
+export function defaultMasterParams() {
+	return { active: 1, threshold: 0.15, ratio: 4, attack: 0.01, release: 0.15, makeup: 1, ceiling: 0.95, hpActive: 0, hpFreq: 20, lpActive: 0, lpFreq: 20000 };
+}
+
+export function defaultPumpParams() {
+	return { active: 0, mode: 1, source: 3, targets: [1, 1, 1, 0], threshold: 0.15, ratio: 8, attack: 0.005, release: 0.25, rate: 1 };
+}
+
 export function createState() {
 	return {
 		layerSel: 0,
@@ -11,6 +19,7 @@ export function createState() {
 		usrChans: 0, // 0 = no WAV FILE sample loaded yet
 		muted: [false, false, false, false],
 		layerFxBypass: [false, false, false, false],
+		mixerLevel: [1, 1, 1, 1], mixerPan: [0, 0, 0, 0], mixerSend: [1, 1, 1, 1],
 		maxVoices: 6,
 		tempoBpm: 120,
 		vol: 0.5,
@@ -18,12 +27,14 @@ export function createState() {
 		slotType: [0, 1, 3],
 		slotParams: [slotDefaults(0), slotDefaults(1), slotDefaults(3)],
 		revShimParams: { active: 1, size: 0.7, decay: 0.72, damp: 0.35, shimmer: 0.3, mix: 1.0 },
-		masterParams: { active: 1, threshold: 0.15, ratio: 4, attack: 0.01, release: 0.15, makeup: 1, ceiling: 0.95 },
+		masterParams: defaultMasterParams(),
+		pumpParams: defaultPumpParams(),
 		keyRoot: 0, keyScale: 1, padKeyBase: 36,
 		seqNote: [60, 60, 60, 60], // persistent note selector value per sequencer layer
 		seq: Array.from({ length: 4 }, () => Object.assign(newTrack(), { selectedStep: null })),
 		playing: false,
 		controlView: 0, // 0 = sequencer, 1 = Launchpad grid
+		page: "play", // play (LAYERS) | mixer | master | export
 		recArm: false,
 		lockSpecId: "cutoff",
 		currentPatchName: "untitled",

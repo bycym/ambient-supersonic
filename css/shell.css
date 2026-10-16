@@ -1,14 +1,14 @@
 :root {
-	--bg: #12141a;
-	--panel: #1b1e27;
-	--panel2: #232733;
-	--fg: #e8e8ec;
-	--dim: #8a8f9c;
-	--accent: #4fb0ff;
-	--accent2: #5be0a0;
-	--danger: #ff5f6d;
-	--border: #2c303c;
-	font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+	--bg: #0c1114;
+	--panel: #151d20;
+	--panel2: #1d292b;
+	--fg: #edf2e9;
+	--dim: #a8bab5;
+	--accent: #b6e56d;
+	--accent2: #81dbc4;
+	--danger: #ff847e;
+	--border: #344442;
+	font-family: "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -20,12 +20,17 @@ html, body {
 	color: var(--fg);
 }
 
+body {
+	background: radial-gradient(ellipse at 50% -25%, #20392f 0, transparent 48%), var(--bg);
+}
+
 #tabbar {
 	display: flex;
-	gap: 2px;
-	background: var(--panel);
+	gap: 12px;
+	align-items: center;
+	background: #101819;
 	border-bottom: 1px solid var(--border);
-	padding: 0 8px;
+	padding: 0 clamp(12px, 3vw, 40px);
 }
 
 #tabbar button {
@@ -48,6 +53,8 @@ html, body {
 	border-bottom-color: var(--accent);
 }
 
+#tab-btn-ambient { text-transform: uppercase; letter-spacing: .17em !important; }
+
 #tabbar .spacer { flex: 1; }
 
 #tabbar .status {
@@ -63,8 +70,8 @@ html, body {
 	background: transparent;
 	border: 1px solid var(--danger);
 	color: var(--danger);
-	border-radius: 6px;
-	padding: 6px 12px;
+	border-radius: 999px;
+	padding: 8px 16px;
 	font-size: 12px;
 	font-weight: 700;
 	cursor: pointer;
@@ -88,8 +95,18 @@ html, body {
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	gap: 14px;
+	gap: 18px;
+	padding: 28px;
+	text-align: center;
 	color: var(--dim);
+}
+
+.boot-gate > div:first-child {
+	max-width: 680px;
+	color: var(--fg);
+	font-size: clamp(22px, 4vw, 42px);
+	font-weight: 700;
+	letter-spacing: -.035em;
 }
 
 .boot-gate button {
@@ -97,8 +114,8 @@ html, body {
 	background: var(--accent);
 	color: #06121c;
 	border: none;
-	border-radius: 8px;
-	padding: 14px 28px;
+	border-radius: 999px;
+	padding: 16px 34px;
 	font-size: 15px;
 	font-weight: 700;
 	cursor: pointer;
@@ -107,3 +124,8 @@ html, body {
 .boot-gate button:disabled { opacity: 0.5; cursor: default; }
 
 .boot-gate .hint { font-size: 12px; max-width: 420px; text-align: center; }
+
+button:focus-visible, select:focus-visible, input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
